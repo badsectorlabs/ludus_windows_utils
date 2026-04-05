@@ -1,0 +1,295 @@
+---
+# ludus_iis_webdav — Installs WebDAV client (GOAD-style) and/or IIS WebDAV server
+#
+# Modes:
+#   "client" — WebDAV-Redirector + WebClient service (NTLM coercion)
+#   "server" — Full IIS + WebDAV Publishing with authoring rules
+#   "both"   — Both client and server features
+
+# =============================================================================
+# CLIENT MODE — WebDAV-Redirector / WebClient service
+# Matches GOAD: https://github.com/Orange-Cyberdefense/GOAD/blob/main/ansible/roles/webdav/tasks/main.yml
+# Purpose: Enables WebClient service for NTLM coercion attacks (relay, PetitPotam)
+# =============================================================================
+
+- name: Install WebDAV client feature (WebDAV-Redirector)
+  ansible.windows.win_feature:
+    name: WebDAV-Redirector
+    state: present
+  register: _webdav_client_feature
+  when: ludus_iis_webdav_mode in ['client', 'both']
+
+- name: Reboot after installing WebDAV client feature
+  ansible.windows.win_reboot:
+    reboot_timeout: 600
+    post_reboot_delay: 30
+  when:
+    - ludus_iis_webdav_mode in ['client', 'both']
+    - _webdav_client_feature.reboot_required | default(false)
+
+- name: Start and enable WebClient service
+  ansible.windows.win_service:
+    name: WebClient
+    state: started
+    start_mode: auto
+  when:
+    - ludus_iis_webdav_mode in ['client', 'both']
+    - ludus_webdav_client_start_service | bool
+
+# =============================================================================
+# SERVER MODE — IIS + WebDAV Publishing
+# Purpose: Full IIS web server with WebDAV authoring for file upload/download
+# =============================================================================
+
+- name: Install IIS Web Server features
+  ansible.windows.win_feature:
+    name:
+      - Web-Server
+      - Web-Common-Http
+      - Web-Default-Doc
+      - Web-Dir-Browsing
+      - Web-Http-Errors
+      - Web-Static-Content
+      - Web-Http-Logging
+      - Web-Stat-Compression
+      - Web-Filtering
+      - Web-Windows-Auth
+      - Web-Mgmt-Tools
+      - Web-Mgmt-Console
+    state: present
+    include_management_tools: true
+  register: _iis_feature
+  when: ludus_iis_webdav_mode in ['server', 'both']
+
+# ASP.NET 4.5 features — required for ASPX webshell execution (GOAD attack path)
+# Without these, uploaded .aspx files return 404 or aren't processed by IIS.
+# GOAD uses include_sub_features: yes which gets all of these automatically.
+- name: Install ASP.NET 4.5 and related features
+  ansible.windows.win_feature:
+    name:
+      - Web-Asp-Net45
+      - Web-Net-Ext45
+      - Web-ISAPI-Ext
+      - Web-ISAPI-Filter
+    state: present
+  register: _aspnet_feature
+  when:
+    - ludus_iis_webdav_mode in ['server', 'both']
+    - ludus_iis_install_aspnet | bool
+
+# IIS 6 Compatibility features — GOAD installs these for legacy support.
+# Includes IIS 6 Metabase, Legacy Console, Legacy Scripting, WMI.
+- name: Install IIS 6 Compatibility features
+  ansible.windows.win_feature:
+    name:
+      - Web-Mgmt-Compat
+      - Web-Metabase
+      - Web-Lgcy-Mgmt-Console
+      - Web-Lgcy-Scripting
+      - Web-WMI
+    state: present
+  register: _iis6_compat_feature
+  when:
+    - ludus_iis_webdav_mode in ['server', 'both']
+    - ludus_iis_install_legacy_compat | bool
+
+# GOAD sets SYSTEM FullControl on MachineKeys for IIS 6 component installation
+- name: Set SYSTEM ACL on MachineKeys directory (IIS 6 compat requirement)
+  ansible.windows.win_acl:
+    path: "C:\\ProgramData\\Microsoft\\Crypto\\RSA\\MachineKeys\\"
+    user: SYSTEM
+    rights: FullControl
+    type: allow
+    state: present
+    inherit: ContainerInherit, ObjectInherit
+    propagation: 'InheritOnly'
+  when:
+    - ludus_iis_webdav_mode in ['server', 'both']
+    - ludus_iis_install_legacy_compat | bool
+
+- name: Install WebDAV Publishing feature
+  ansible.windows.win_feature:
+    name:
+      - Web-DAV-Publishing
+    state: present
+  register: _webdav_server_feature
+  when: ludus_iis_webdav_mode in ['server', 'both']
+
+- name: Reboot if IIS/WebDAV/ASP.NET feature install requires it
+  ansible.windows.win_reboot:
+    reboot_timeout: 600
+    post_reboot_delay: 30
+  when:
+    - ludus_iis_webdav_mode in ['server', 'both']
+    - (_iis_feature.reboot_required | default(false)) or
+      (_webdav_server_feature.reboot_required | default(false)) or
+      (_aspnet_feature.reboot_required | default(false)) or
+      (_iis6_compat_feature.reboot_required | default(false))
+
+# ============================================================
+# Upload directory setup
+# ============================================================
+
+- name: Create upload directory
+  ansible.windows.win_file:
+    path: "{{ ludus_iis_upload_dir }}"
+    state: directory
+  when:
+    - ludus_iis_webdav_mode in ['server', 'both']
+    - ludus_iis_upload_dir | length > 0
+
+- name: Set NTFS permissions on upload directory
+  ansible.windows.win_acl:
+    path: "{{ ludus_iis_upload_dir }}"
+    user: "{{ ludus_iis_upload_dir_user }}"
+    rights: "{{ ludus_iis_upload_dir_rights }}"
+    type: allow
+    state: present
+  when:
+    - ludus_iis_webdav_mode in ['server', 'both']
+    - ludus_iis_upload_dir | length > 0
+
+# ============================================================
+# Deploy website content
+# ============================================================
+
+# Custom mode — deploy from role's files/wwwroot/ directory
+- name: Copy custom website content to wwwroot
+  ansible.windows.win_copy:
+    src: "wwwroot/"
+    dest: "C:\\inetpub\\wwwroot\\"
+  when:
+    - ludus_iis_webdav_mode in ['server', 'both']
+    - ludus_iis_content_mode == 'custom'
+
+# GOAD mode — download GOAD ASP.NET file upload app from GitHub
+# Source: https://github.com/Orange-Cyberdefense/GOAD/tree/main/ad/GOAD/files/srv02/wwwroot
+# Attack path: Upload ASPX webshell via the file upload form → code execution
+- name: Deploy GOAD wwwroot content (ASP.NET file upload app)
+  ansible.builtin.include_tasks: deploy_goad_content.yml
+  when:
+    - ludus_iis_webdav_mode in ['server', 'both']
+    - ludus_iis_content_mode == 'goad'
+
+# ============================================================
+# Configure WebDAV authoring rules
+# Uses appcmd.exe for reliable IIS configuration
+# ============================================================
+
+- name: Enable WebDAV authoring on Default Web Site
+  ansible.windows.win_powershell:
+    script: |
+      # Enable WebDAV authoring globally on the Default Web Site
+      $appcmd = "$env:SystemRoot\System32\inetsrv\appcmd.exe"
+
+      # Unlock the WebDAV section at the server level first
+      & $appcmd unlock config -section:system.webServer/webdav/authoring -commit:apphost 2>&1 | Out-Null
+      & $appcmd unlock config -section:system.webServer/webdav/authoringRules -commit:apphost 2>&1 | Out-Null
+
+      # Enable WebDAV authoring on Default Web Site
+      & $appcmd set config "Default Web Site" `
+        -section:system.webServer/webdav/authoring `
+        /enabled:true `
+        /requireSsl:false 2>&1 | Out-Null
+
+      # Enable Windows Authentication (required for WebDAV write operations)
+      & $appcmd set config "Default Web Site" `
+        -section:system.webServer/security/authentication/windowsAuthentication `
+        /enabled:true 2>&1 | Out-Null
+
+      # Allow anonymous authentication for read access
+      & $appcmd set config "Default Web Site" `
+        -section:system.webServer/security/authentication/anonymousAuthentication `
+        /enabled:true 2>&1 | Out-Null
+
+      $Ansible.Changed = $true
+      Write-Output "WebDAV authoring enabled on Default Web Site"
+  when: ludus_iis_webdav_mode in ['server', 'both']
+  changed_when: false
+
+- name: Configure WebDAV authoring rules
+  ansible.windows.win_powershell:
+    script: |
+      param($Users, $Path, $Access)
+      $appcmd = "$env:SystemRoot\System32\inetsrv\appcmd.exe"
+
+      # Clear existing authoring rules first (idempotent)
+      & $appcmd clear config "Default Web Site" `
+        -section:system.webServer/webdav/authoringRules 2>&1 | Out-Null
+
+      # Add the authoring rule
+      & $appcmd set config "Default Web Site" `
+        -section:system.webServer/webdav/authoringRules `
+        "/+[users='$Users',path='$Path',access='$Access']" 2>&1 | Out-Null
+
+      Write-Output "Added WebDAV authoring rule: users=$Users path=$Path access=$Access"
+      $Ansible.Changed = $true
+    parameters:
+      Users: "{{ item.users }}"
+      Path: "{{ item.path }}"
+      Access: "{{ item.access }}"
+  loop: "{{ ludus_iis_webdav_authoring_rules }}"
+  loop_control:
+    label: "{{ item.users }} -> {{ item.path }} ({{ item.access }})"
+  when: ludus_iis_webdav_mode in ['server', 'both']
+
+- name: Add WebDAV MIME mapping for all file types
+  ansible.windows.win_powershell:
+    script: |
+      $appcmd = "$env:SystemRoot\System32\inetsrv\appcmd.exe"
+
+      # Allow all MIME types for WebDAV (needed for arbitrary file uploads)
+      & $appcmd set config "Default Web Site" `
+        -section:system.webServer/webdav/authoring `
+        "/fileSystem.allowHiddenFiles:true" 2>&1 | Out-Null
+
+      # Add a catch-all MIME type if not already present
+      $existing = & $appcmd list config "Default Web Site" `
+        -section:staticContent 2>&1
+      if ($existing -notmatch '\.\*') {
+        & $appcmd set config "Default Web Site" `
+          -section:staticContent `
+          "/+[fileExtension='.*',mimeType='application/octet-stream']" 2>&1 | Out-Null
+        Write-Output "Added catch-all MIME type"
+      } else {
+        Write-Output "Catch-all MIME type already exists"
+      }
+      $Ansible.Changed = $true
+  when: ludus_iis_webdav_mode in ['server', 'both']
+  changed_when: false
+
+# ============================================================
+# Ensure IIS service is running
+# ============================================================
+
+- name: Start and enable IIS service (W3SVC)
+  ansible.windows.win_service:
+    name: W3SVC
+    state: started
+    start_mode: auto
+  when: ludus_iis_webdav_mode in ['server', 'both']
+
+# ============================================================
+# Summary
+# ============================================================
+
+- name: Display configuration summary
+  ansible.builtin.debug:
+    msg: |
+      ============================================
+      IIS/WebDAV Configuration — {{ ansible_hostname }}
+      ============================================
+      Mode: {{ ludus_iis_webdav_mode }}
+      {% if ludus_iis_webdav_mode in ['client', 'both'] %}
+      WebClient Service: {{ 'Started' if ludus_webdav_client_start_service else 'Not started' }}
+      {% endif %}
+      {% if ludus_iis_webdav_mode in ['server', 'both'] %}
+      IIS: Installed
+      ASP.NET 4.5: {{ 'Installed' if ludus_iis_install_aspnet else 'Not installed' }}
+      Legacy Compat: {{ 'Installed' if ludus_iis_install_legacy_compat else 'Not installed' }}
+      WebDAV Publishing: Enabled
+      Content Mode: {{ ludus_iis_content_mode }}
+      Upload Dir: {{ ludus_iis_upload_dir | default('Not configured') }}
+      Authoring Rules: {{ ludus_iis_webdav_authoring_rules | length }}
+      {% endif %}
+      ============================================

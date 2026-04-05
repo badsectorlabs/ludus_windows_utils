@@ -1,0 +1,135 @@
+---
+# ludus_smb_shares - SMB Share Configuration for Ludus
+# Default configuration variables
+
+# =============================================================================
+# SMB SHARES CONFIGURATION
+# =============================================================================
+
+# List of SMB shares to create
+ludus_smb_shares: []
+# Example configuration:
+# ludus_smb_shares:
+#   - name: "public"
+#     path: "C:\\shares\\public"
+#     description: "Public share - everyone can read/write"
+#     full_access:
+#       - "Everyone"
+#     read_access: []
+#     change_access: []
+#     no_access: []
+#     # For anonymous access (null session)
+#     allow_anonymous: false
+#
+#   - name: "all"
+#     path: "C:\\shares\\all"
+#     description: "All share - Domain Users can read/write"
+#     full_access:
+#       - "Domain Users"
+#     read_access: []
+#     change_access: []
+#     no_access: []
+#     allow_anonymous: false
+#
+#   - name: "confidential"
+#     path: "C:\\shares\\confidential"
+#     description: "Confidential share - Admins only"
+#     full_access:
+#       - "Domain Admins"
+#     read_access:
+#       - "Authenticated Users"
+#     change_access: []
+#     no_access: []
+#     allow_anonymous: false
+
+# =============================================================================
+# GOAD MODE PRESETS
+# =============================================================================
+
+# Use GOAD preset configurations
+ludus_smb_shares_mode: "custom"  # Options: "custom", "goad"
+
+# Hostname override for GOAD mode lookup (default: auto-detected from ansible_hostname)
+ludus_smb_shares_hostname_override: ""
+
+# GOAD-specific share configurations (used when mode == "goad")
+ludus_goad_smb_shares:
+  castelblack:
+    - name: "all"
+      path: "C:\\shares\\all"
+      description: "Writable share for NTLM coercion attacks"
+      full_access:
+        - "Domain Users"
+        - "Everyone"
+      read_access: []
+      change_access: []
+      no_access: []
+      allow_anonymous: false
+
+    - name: "public"
+      path: "C:\\shares\\public"
+      description: "Public readable share"
+      full_access: []
+      read_access:
+        - "Everyone"
+      change_access:
+        - "Domain Users"
+      no_access: []
+      allow_anonymous: true
+
+  braavos:
+    - name: "all"
+      path: "C:\\shares\\all"
+      description: "Writable share"
+      full_access:
+        - "Domain Users"
+      read_access: []
+      change_access: []
+      no_access: []
+      allow_anonymous: false
+
+    - name: "CertEnroll"
+      path: "C:\\Windows\\system32\\CertSrv\\CertEnroll"
+      description: "Certificate enrollment share"
+      full_access: []
+      read_access:
+        - "Authenticated Users"
+      change_access: []
+      no_access: []
+      allow_anonymous: false
+
+  winterfell:
+    - name: "SYSVOL"
+      path: "C:\\Windows\\SYSVOL\\sysvol"
+      description: "Domain SYSVOL"
+      read_access:
+        - "Authenticated Users"
+      full_access:
+        - "Domain Admins"
+      change_access: []
+      no_access: []
+      allow_anonymous: false
+
+  kingslanding:
+    - name: "SYSVOL"
+      path: "C:\\Windows\\SYSVOL\\sysvol"
+      description: "Domain SYSVOL"
+      read_access:
+        - "Authenticated Users"
+      full_access:
+        - "Domain Admins"
+      change_access: []
+      no_access: []
+      allow_anonymous: false
+
+  meereen:
+    - name: "SYSVOL"
+      path: "C:\\Windows\\SYSVOL\\sysvol"
+      description: "Domain SYSVOL"
+      read_access:
+        - "Authenticated Users"
+      full_access:
+        - "Domain Admins"
+      change_access: []
+      no_access: []
+      allow_anonymous: false

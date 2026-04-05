@@ -1,0 +1,89 @@
+---
+# deploy_goad_content.yml — Download and deploy GOAD ASP.NET file upload app
+#
+# Downloads the GOAD wwwroot directory from GitHub and deploys it to IIS.
+# This includes:
+#   - Default.aspx (ASP.NET file upload form)
+#   - Web.config (ASP.NET configuration)
+#   - index.html (simple landing page)
+#   - bin/WebApp.dll (compiled ASP.NET app)
+#   - bin/Microsoft.CodeDom.Providers.DotNetCompilerPlatform.dll
+#   - bin/roslyn/ (Roslyn compiler — ~48 files, ~18MB)
+#   - upload/ (writable directory for uploaded files)
+#
+# Attack path: Upload ASPX webshell via file upload form → IIS executes → RCE
+# Requires: ludus_iis_install_aspnet: true (ASP.NET 4.5 features)
+#
+# Source: https://github.com/Orange-Cyberdefense/GOAD/tree/main/ad/GOAD/files/srv02/wwwroot
+
+# The GOAD wwwroot contains compiled DLLs and the full Roslyn compiler (~48 files).
+# We download the repo as a tarball and extract just the wwwroot directory,
+# rather than making 50+ individual HTTP requests.
+
+- name: Download GOAD repository archive to Ludus host
+  ansible.builtin.get_url:
+    url: "https://github.com/Orange-Cyberdefense/GOAD/archive/refs/heads/main.tar.gz"
+    dest: "/tmp/goad-main.tar.gz"
+    mode: "0644"
+    timeout: 120
+  delegate_to: localhost
+  run_once: true
+  become: false
+
+- name: Create temp extraction directory on Ludus host
+  ansible.builtin.file:
+    path: "/tmp/goad-wwwroot-extract"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+  run_once: true
+  become: false
+
+- name: Extract only wwwroot from GOAD archive
+  ansible.builtin.shell: |
+    tar xzf /tmp/goad-main.tar.gz \
+      -C /tmp/goad-wwwroot-extract \
+      --strip-components=6 \
+      "GOAD-main/ad/GOAD/files/srv02/wwwroot"
+  args:
+    creates: "/tmp/goad-wwwroot-extract/Default.aspx"
+  delegate_to: localhost
+  run_once: true
+  become: false
+
+- name: Verify GOAD wwwroot was extracted correctly
+  ansible.builtin.stat:
+    path: "/tmp/goad-wwwroot-extract/Default.aspx"
+  delegate_to: localhost
+  register: _goad_aspx_check
+  become: false
+
+- name: Fail if GOAD wwwroot extraction failed
+  ansible.builtin.fail:
+    msg: >
+      Failed to extract GOAD wwwroot from archive.
+      Expected /tmp/goad-wwwroot-extract/Default.aspx to exist.
+      Check that the GOAD repo structure hasn't changed.
+  when: not _goad_aspx_check.stat.exists
+
+- name: Create wwwroot directory on target VM
+  ansible.windows.win_file:
+    path: "C:\\inetpub\\wwwroot"
+    state: directory
+
+- name: Deploy GOAD wwwroot to IIS on target VM
+  ansible.windows.win_copy:
+    src: "/tmp/goad-wwwroot-extract/"
+    dest: "C:\\inetpub\\wwwroot\\"
+
+- name: Create upload directory in wwwroot
+  ansible.windows.win_file:
+    path: "C:\\inetpub\\wwwroot\\upload"
+    state: directory
+
+- name: Log GOAD content deployment
+  ansible.builtin.debug:
+    msg: >
+      GOAD ASP.NET file upload app deployed to C:\inetpub\wwwroot\
+      Files: Default.aspx, Web.config, index.html, bin/WebApp.dll, bin/roslyn/
+      Attack: Upload ASPX webshell via http://{{ ansible_host }}/ file upload form

@@ -1,0 +1,37 @@
+---
+# ludus_ad_gmsa - Group Managed Service Account configuration
+#
+# This role uses Ludus-provided variables automatically:
+#   - ludus_domain_fqdn (from range config)
+#   - defaults.ad_domain_admin / defaults.ad_domain_admin_password
+#
+# Based on GOAD's gmsa role:
+# https://github.com/Orange-Cyberdefense/GOAD/tree/main/ansible/roles/gmsa
+
+# Domain admin credentials (fallback if Ludus vars not available)
+ludus_gmsa_domain_admin: "{{ defaults.ad_domain_admin | default('Administrator') }}"
+ludus_gmsa_domain_admin_password: "{{ defaults.ad_domain_admin_password | default('password') }}"
+
+# =============================================================================
+# gMSA ACCOUNTS CONFIGURATION
+# List of Group Managed Service Accounts to create
+#
+# Each entry creates a gMSA with:
+#   - name: Account name (without trailing $)
+#   - dns_hostname: FQDN for the gMSA
+#   - spns: List of Service Principal Names
+#   - permitted_hosts: Computer names allowed to retrieve the managed password
+#     NOTE: Use computer names (e.g., "SRV01") — Get-ADComputer resolves them.
+#     GOAD uses this format. Do NOT include trailing $ here.
+# =============================================================================
+ludus_gmsa_accounts: []
+# Example:
+#   ludus_gmsa_accounts:
+#     - name: gmsaWWW
+#       dns_hostname: gmsaWWW.domain.local
+#       spns:
+#         - "HTTP/webapp"
+#         - "HTTP/webapp.domain.local"
+#       permitted_hosts:
+#         - "SRV01"
+#         - "SRV02"

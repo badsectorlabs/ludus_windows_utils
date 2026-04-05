@@ -1,0 +1,197 @@
+---
+# ludus_files - Deploy files to Windows/Linux VMs in Ludus cyber ranges
+#
+# Modes:
+#   "custom"      - Deploy user-defined files from role_vars
+#   "goad"        - Deploy GOAD-specific files (exact replicas from Orange-Cyberdefense/GOAD repo)
+#   "honeypot"    - Generate realistic bait/honey files that look valuable to attackers
+#   "breadcrumbs" - Drop credential breadcrumbs and lateral movement hints
+#   "all"         - Combine all enabled modes
+#
+# GOAD Regular topology (5 VMs):
+#   dc01 = kingslanding (sevenkingdoms.local, primary DC + CA)
+#   dc02 = winterfell   (north.sevenkingdoms.local, child DC)
+#   srv02 = castelblack  (north.sevenkingdoms.local, member server: IIS+MSSQL)
+#   dc03 = meereen      (essos.local, DC + CA)
+#   srv03 = braavos      (essos.local, member server: MSSQL)
+#
+# Ludus-provided variables used automatically:
+#   - ludus_domain_fqdn, ludus_domain_netbios_name
+#   - defaults.ad_domain_admin, defaults.ad_domain_admin_password
+#   - range_id, range_second_octet
+
+# =============================================================================
+# MODE SELECTION
+# =============================================================================
+ludus_files_mode: "custom"  # Options: "custom", "goad", "honeypot", "breadcrumbs", "all"
+
+# =============================================================================
+# CUSTOM MODE — User-defined file deployments
+# =============================================================================
+ludus_files_custom: []
+# Examples:
+# ludus_files_custom:
+#   - src: "scripts/my_script.ps1"           # From role's files/ directory
+#     dest: "C:\\setup\\my_script.ps1"
+#   - content: "Hello World"                  # Inline content
+#     dest: "C:\\Users\\Public\\hello.txt"
+#   - content: "{{ some_var }}"               # Templated content
+#     dest: "C:\\setup\\config.txt"
+#     create_dirs: ["C:\\setup"]              # Create dirs first
+
+# =============================================================================
+# GOAD MODE — Exact GOAD file deployments from config.json
+# =============================================================================
+# Source: https://github.com/Orange-Cyberdefense/GOAD/tree/main/ad/GOAD
+#
+# GOAD deploys files via three mechanisms in its Ansible:
+#   1. vulns/files role — copies files from ad/GOAD/files/<host>/ to VM
+#   2. vulns/schedule role — creates scheduled tasks that run scripts
+#   3. vulns/credentials role — stores credentials in Credential Manager
+#   4. vulns/autologon role — sets Windows autologon registry keys
+#
+# This role handles CATEGORY 1 (file deployment).
+# Categories 2-4 are handled by ludus_ad_misconfigs.
+#
+# Files keyed by hostname (lowercase). Only hosts with files are listed.
+ludus_files_goad_hostname_override: ""
+
+ludus_files_goad:
+  # ============================================================
+  # DC02 / winterfell (north.sevenkingdoms.local)
+  # ============================================================
+  # These files support the following GOAD attack paths:
+  #   - Credential harvesting via SYSVOL enumeration (secret.ps1)
+  #   - SYSVOL script discovery (script.ps1 has plaintext creds)
+  #   - RDP session hijacking practice (bot_rdp.ps1 + scheduled task)
+  #   - Responder/LLMNR poisoning (responder.ps1 scheduled task triggers SMB to misspelled hosts)
+  winterfell:
+    # bot_rdp.ps1 — RDP bot that connects robb.stark to castelblack every minute
+    # Deployed to C:\setup\ and executed by the "connect_bot" scheduled task
+    # Attack: Responder/NTLM capture of robb.stark's RDP credential
+    # Source: https://github.com/Orange-Cyberdefense/GOAD/blob/main/ad/GOAD/files/dc02/bot_rdp.ps1
+    - content: |
+        # https://learn.microsoft.com/fr-fr/troubleshoot/windows-server/user-profiles-and-logon/turn-on-automatic-logon
+        if(-not(query session robb.stark /server:castelblack)) {
+          #kill process if exist
+          Get-Process mstsc -IncludeUserName | Where {$_.UserName -eq "NORTH\robb.stark"}|Stop-Process
+          #run the command
+          mstsc /v:castelblack
+        }
+      dest: "C:\\setup\\bot_rdp.ps1"
+      create_dirs:
+        - "C:\\setup"
+      description: "RDP bot — robb.stark connects to castelblack (credential capture practice)"
+
+    # script.ps1 — SYSVOL logon script with plaintext credentials
+    # Attack: SYSVOL enumeration reveals jeor.mormont's password
+    # Blog: https://mayfly277.github.io/posts/GOADv2-pwning-part2/ (credential discovery)
+    # Source: https://github.com/Orange-Cyberdefense/GOAD/blob/main/ad/GOAD/files/dc02/sysvol_scripts/script.ps1
+    - content: |
+        # fake script in netlogon with creds
+        $task = '/c TODO'
+        $taskName = "fake task"
+        $user = "NORTH\jeor.mormont"
+        $password = "_L0ngCl@w_"
+
+        # passwords in sysvol still ...
+      dest: "C:\\Windows\\SYSVOL\\domain\\scripts\\script.ps1"
+      description: "SYSVOL script with jeor.mormont creds (SYSVOL enumeration attack)"
+
+    # secret.ps1 — Encrypted credential script in SYSVOL
+    # Attack: Practitioners can find the key and decrypt the secret
+    #         (or just find the plaintext password in script.ps1 above)
+    # Source: https://github.com/Orange-Cyberdefense/GOAD/blob/main/ad/GOAD/files/dc02/sysvol_scripts/secret.ps1
+    - content: |
+        # cypher script
+        # $domain="sevenkingdoms.local"
+        # $EncryptionKeyBytes = New-Object Byte[] 32
+        # [Security.Cryptography.RNGCryptoServiceProvider]::Create().GetBytes($EncryptionKeyBytes)
+        # $EncryptionKeyBytes | Out-File "encryption.key"
+        # $EncryptionKeyData = Get-Content "encryption.key"
+        # Read-Host -AsSecureString | ConvertFrom-SecureString -Key $EncryptionKeyData | Out-File -FilePath "secret.encrypted"
+
+        # secret stored :
+        $keyData = 177, 252, 228, 64, 28, 91, 12, 201, 20, 91, 21, 139, 255, 65, 9, 247, 41, 55, 164, 28, 75, 132, 143, 71, 62, 191, 211, 61, 154, 61, 216, 91
+        $secret="76492d1116743f0423413b16050a5345MgB8AGkAcwBDACsAUwArADIAcABRAEcARABnAGYAMwA3AEEAcgBFAEIAYQB2AEEAPQA9AHwAZQAwADgANAA2ADQAMABiADYANAAwADYANgA1ADcANgAxAGIAMQBhAGQANQBlAGYAYQBiADQAYQA2ADkAZgBlAGQAMQAzADAANQAyADUAMgAyADYANAA3ADAAZABiAGEAOAA0AGUAOQBkAGMAZABmAGEANAAyADkAZgAyADIAMwA="
+
+        # T.L.
+      dest: "C:\\Windows\\SYSVOL\\domain\\scripts\\secret.ps1"
+      description: "SYSVOL encrypted credential script (crypto analysis practice)"
+
+  # ============================================================
+  # SRV02 / castelblack (north.sevenkingdoms.local)
+  # ============================================================
+  # These files support the following GOAD attack paths:
+  #   - WebDAV/IIS webshell upload (wwwroot with Default.aspx file uploader)
+  #   - SMB share enumeration (arya.txt in \\castelblack\all)
+  #   - ASPX webshell upload → code execution (IIS_IUSRS has FullControl on upload/)
+  castelblack:
+    # arya.txt — Letter in the open SMB share
+    # Attack: SMB share enumeration reveals readable file
+    # Blog: https://mayfly277.github.io/posts/GOADv2-pwning-part3/ (share enum)
+    # Source: https://github.com/Orange-Cyberdefense/GOAD/blob/main/ad/GOAD/files/srv02/all/arya.txt
+    - content: |
+        Subject: Quick Departure
+
+        Hey Arya,
+
+        I hope this message finds you well. Something urgent has come up, and I have to leave for a while. Don't worry; I'll be back soon.
+
+        I left a little surprise for you in your room – the sword You've named "Needle." It felt fitting, given your skills. Take care of it, and it'll take care of you.
+
+        I'll explain everything when I return. Until then, stay sharp, sis.
+
+        Best,
+        John
+      dest: "C:\\shares\\all\\arya.txt"
+      create_dirs:
+        - "C:\\shares"
+        - "C:\\shares\\all"
+      description: "SMB share content — discoverable via share enumeration"
+
+    # NOTE: The full ASP.NET wwwroot (index.html, Default.aspx, Web.config,
+    # WebApp.dll, roslyn compiler) is deployed by the ludus_iis_webdav role
+    # (server mode with ludus_iis_deploy_content: true).
+    # Attack: Upload ASPX webshell via the file upload form or WebDAV
+    # Blog: https://mayfly277.github.io/posts/GOADv2-pwning-part5/ (webshell upload)
+
+# =============================================================================
+# HONEYPOT MODE — Generate realistic bait files
+# =============================================================================
+ludus_honeypot_enabled: true
+
+ludus_honeypot_categories:
+  - credentials
+  - financial
+  - hr
+  - it
+  - executive
+
+ludus_honeypot_locations:
+  - "C:\\Users\\Public\\Documents"
+  - "C:\\Users\\{{ defaults.ad_domain_admin | default('domainadmin') }}\\Desktop"
+  - "C:\\Users\\{{ defaults.ad_domain_admin | default('domainadmin') }}\\Documents"
+  - "C:\\Temp"
+  - "C:\\Backups"
+  - "C:\\IT"
+
+ludus_honeypot_density: 1
+ludus_honeypot_include_legacy: true
+ludus_honeypot_company_name: "{{ ludus_domain_netbios_name | default('YOURCOMPANY') }}"
+ludus_honeypot_domain: "{{ ludus_domain_fqdn | default('domain.local') }}"
+
+# =============================================================================
+# BREADCRUMBS MODE — Drop credential hints and lateral movement artifacts
+# =============================================================================
+ludus_breadcrumbs_enabled: true
+
+ludus_breadcrumbs_types:
+  - registry_creds
+  - powershell_history
+  - browser_bookmarks
+  - recent_docs
+  - connection_strings
+  - sticky_notes
+
+ludus_breadcrumbs_custom: []

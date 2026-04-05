@@ -1,0 +1,210 @@
+---
+# ludus_ad_acls - Set AD ACL entries for attack chains
+# Idempotent: checks if ACE exists before adding
+
+# =============================================================================
+# DOMAIN CONFIGURATION
+# =============================================================================
+- name: Set domain facts
+  ansible.builtin.set_fact:
+    _ludus_domain_name: "{{ ludus_ad_acl_domain | default(ludus_domain_fqdn, true) | default(ludus_child_domain_fqdn, true) | default('') }}"
+
+- name: Validate domain name
+  ansible.builtin.assert:
+    that:
+      - _ludus_domain_name | length > 0
+    fail_msg: "Domain name not available. Ensure this VM has domain.fqdn set."
+
+# =============================================================================
+# BUILD ACL LIST BASED ON MODE
+# =============================================================================
+- name: Set ACL entries from GOAD data only (goad mode)
+  ansible.builtin.set_fact:
+    _acl_entries: "{{ ludus_goad_acl_data[_ludus_domain_name] | default([]) }}"
+  when: ludus_ad_acl_mode == "goad"
+
+- name: Set ACL entries from custom data only (custom mode)
+  ansible.builtin.set_fact:
+    _acl_entries: "{{ ludus_ad_acl_entries | default([]) }}"
+  when: ludus_ad_acl_mode == "custom"
+
+- name: Merge GOAD + custom ACL entries (both mode)
+  ansible.builtin.set_fact:
+    _acl_entries: "{{ (ludus_goad_acl_data[_ludus_domain_name] | default([])) + (ludus_ad_acl_entries | default([])) }}"
+  when: ludus_ad_acl_mode == "both"
+
+- name: Display ACL configuration
+  ansible.builtin.debug:
+    msg: |
+      ludus_ad_acls Configuration:
+        Domain: {{ _ludus_domain_name }}
+        ACL entries to apply: {{ _acl_entries | length }}
+
+# =============================================================================
+# APPLY ACL ENTRIES
+# Each entry is applied idempotently - checks if ACE exists first
+# =============================================================================
+- name: Apply AD ACL entries
+  ansible.windows.win_powershell:
+    script: |
+      [CmdletBinding()]
+      param (
+        [String]$Principal,
+        [String]$Target,
+        [String]$TargetType,
+        [String]$Right,
+        [Bool]$WellKnown,
+        [String]$DomainDN
+      )
+      
+      Import-Module ActiveDirectory
+      
+      # Map right names to ActiveDirectoryRights enum values
+      $rightMapping = @{
+        'GenericAll' = 'GenericAll'
+        'GenericWrite' = 'GenericWrite'
+        'GenericRead' = 'GenericRead'
+        'GenericExecute' = 'GenericExecute'
+        'WriteDacl' = 'WriteDacl'
+        'WriteOwner' = 'WriteOwner'
+        'WriteProperty' = 'WriteProperty'
+        'ReadProperty' = 'ReadProperty'
+        'Delete' = 'Delete'
+        'DeleteTree' = 'DeleteTree'
+        'ExtendedRight' = 'ExtendedRight'
+        'CreateChild' = 'CreateChild'
+        'DeleteChild' = 'DeleteChild'
+        'Self' = 'Self'
+        'ForceChangePassword' = 'ExtendedRight'  # Special handling
+        'Self-Membership' = 'Self'  # Special handling
+      }
+      
+      # Extended rights GUIDs
+      $extendedRights = @{
+        'ForceChangePassword' = '00299570-246d-11d0-a768-00aa006e0529'  # User-Force-Change-Password
+        'Self-Membership' = 'bf9679c0-0de6-11d0-a285-00aa003049e2'  # Self-Membership
+      }
+      
+      # Get principal SID
+      try {
+        if ($WellKnown) {
+          # Well-known principals like ANONYMOUS LOGON
+          $principalSID = New-Object System.Security.Principal.NTAccount("NT AUTHORITY", $Principal)
+        } else {
+          $principalObj = Get-ADObject -Filter "sAMAccountName -eq '$Principal' -or Name -eq '$Principal'" -Properties objectSid
+          if (-not $principalObj) {
+            throw "Principal '$Principal' not found in AD"
+          }
+          $principalSID = New-Object System.Security.Principal.SecurityIdentifier($principalObj.objectSid)
+        }
+      } catch {
+        throw "Failed to resolve principal '$Principal': $_"
+      }
+      
+      # Get target object
+      try {
+        switch ($TargetType) {
+          'computer' {
+            $targetName = $Target -replace '\$$', ''
+            $targetObj = Get-ADComputer -Identity $targetName
+          }
+          'group' {
+            $targetObj = Get-ADGroup -Filter "sAMAccountName -eq '$Target' -or Name -eq '$Target'"
+          }
+          'ou' {
+            $ouName = $Target -replace '^OU=', ''
+            $targetObj = Get-ADOrganizationalUnit -Filter "Name -eq '$ouName'"
+          }
+          'container' {
+            $targetObj = Get-ADObject -Filter "distinguishedName -eq '$Target,$DomainDN'"
+            if (-not $targetObj) {
+              $targetObj = Get-ADObject -Identity "$Target,$DomainDN"
+            }
+          }
+          default {
+            # Assume user
+            $targetObj = Get-ADUser -Filter "sAMAccountName -eq '$Target' -or Name -eq '$Target'"
+          }
+        }
+        
+        if (-not $targetObj) {
+          throw "Target '$Target' (type: $TargetType) not found in AD"
+        }
+      } catch {
+        throw "Failed to resolve target '$Target': $_"
+      }
+      
+      $targetDN = $targetObj.DistinguishedName
+      $adPath = "AD:\$targetDN"
+      
+      # Get current ACL
+      $acl = Get-Acl -Path $adPath
+      
+      # Determine the right to apply
+      $adRight = $rightMapping[$Right]
+      if (-not $adRight) {
+        throw "Unknown right: $Right"
+      }
+      
+      # Build the ACE
+      $inheritance = [System.DirectoryServices.ActiveDirectorySecurityInheritance]::None
+      $accessType = [System.Security.AccessControl.AccessControlType]::Allow
+      
+      if ($Right -eq 'ForceChangePassword' -or $Right -eq 'Self-Membership') {
+        # Extended right with specific GUID
+        $rightGuid = [Guid]$extendedRights[$Right]
+        $ace = New-Object System.DirectoryServices.ActiveDirectoryAccessRule(
+          $principalSID,
+          [System.DirectoryServices.ActiveDirectoryRights]::$adRight,
+          $accessType,
+          $rightGuid,
+          $inheritance
+        )
+      } else {
+        $ace = New-Object System.DirectoryServices.ActiveDirectoryAccessRule(
+          $principalSID,
+          [System.DirectoryServices.ActiveDirectoryRights]::$adRight,
+          $accessType,
+          $inheritance
+        )
+      }
+      
+      # Check if ACE already exists
+      $existingAces = $acl.Access | Where-Object {
+        $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq $principalSID.Value -and
+        $_.ActiveDirectoryRights -eq $ace.ActiveDirectoryRights -and
+        $_.AccessControlType -eq $ace.AccessControlType
+      }
+      
+      if ($existingAces) {
+        Write-Output "ACE already exists: $Principal -> $Target ($Right)"
+        $Ansible.Changed = $false
+      } else {
+        # Add the ACE
+        $acl.AddAccessRule($ace)
+        Set-Acl -Path $adPath -AclObject $acl
+        Write-Output "ACE added: $Principal -> $Target ($Right)"
+        $Ansible.Changed = $true
+      }
+    parameters:
+      Principal: "{{ item.principal }}"
+      Target: "{{ item.target }}"
+      TargetType: "{{ item.target_type | default('user') }}"
+      Right: "{{ item.right }}"
+      WellKnown: "{{ item.well_known | default(false) }}"
+      DomainDN: "{{ _ludus_domain_name.split('.') | map('regex_replace', '^', 'DC=') | join(',') }}"
+  loop: "{{ _acl_entries }}"
+  loop_control:
+    label: "{{ item.principal }} → {{ item.target }} ({{ item.right }})"
+  when: _acl_entries | length > 0
+  register: _acl_results
+
+# =============================================================================
+# SUMMARY
+# =============================================================================
+- name: Display summary
+  ansible.builtin.debug:
+    msg: |
+      ludus_ad_acls completed:
+        Domain: {{ _ludus_domain_name }}
+        ACL entries processed: {{ _acl_entries | length }}

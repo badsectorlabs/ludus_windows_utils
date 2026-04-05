@@ -1,4 +1,4 @@
-*.tar.gz
 *.retry
-.venv/
+*.pyc
 __pycache__/
+.molecule/

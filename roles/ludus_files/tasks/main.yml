@@ -1,0 +1,159 @@
+---
+# ludus_files - Deploy files to Windows/Linux VMs in Ludus cyber ranges
+# Supports: custom, goad, honeypot, breadcrumbs, all
+
+# =============================================================================
+# DETERMINE ACTIVE MODES
+# =============================================================================
+
+- name: Set active modes list
+  ansible.builtin.set_fact:
+    _files_active_modes: >-
+      {{
+        ['custom', 'goad', 'honeypot', 'breadcrumbs']
+        if ludus_files_mode == 'all'
+        else [ludus_files_mode]
+      }}
+
+- name: Display configuration
+  ansible.builtin.debug:
+    msg: |
+      ludus_files Configuration:
+        Mode: {{ ludus_files_mode }}
+        Active modes: {{ _files_active_modes | join(', ') }}
+        Hostname: {{ ansible_hostname | lower }}
+
+# =============================================================================
+# CUSTOM MODE — Deploy user-defined files
+# =============================================================================
+
+- name: Deploy custom files
+  when: "'custom' in _files_active_modes and ludus_files_custom | default([]) | length > 0"
+  block:
+    - name: Create directories for custom files
+      ansible.windows.win_file:
+        path: "{{ dir_item }}"
+        state: directory
+      loop: >-
+        {{ ludus_files_custom
+           | selectattr('create_dirs', 'defined')
+           | map(attribute='create_dirs')
+           | flatten
+           | unique
+           | list }}
+      loop_control:
+        loop_var: dir_item
+        label: "{{ dir_item }}"
+
+    - name: Deploy custom files from role files/ directory
+      ansible.windows.win_copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+      loop: "{{ ludus_files_custom | selectattr('src', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.dest }}"
+
+    - name: Deploy custom files with inline content
+      ansible.windows.win_copy:
+        content: "{{ item.content }}"
+        dest: "{{ item.dest }}"
+      loop: "{{ ludus_files_custom | selectattr('content', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.dest }}"
+
+    - name: Log custom files deployed
+      ansible.builtin.debug:
+        msg: "Deployed {{ ludus_files_custom | length }} custom file(s)"
+
+# =============================================================================
+# GOAD MODE — Deploy GOAD-specific files based on hostname
+# =============================================================================
+
+- name: Deploy GOAD files
+  when: "'goad' in _files_active_modes"
+  block:
+    - name: Resolve hostname for GOAD lookup
+      ansible.builtin.set_fact:
+        _goad_files_hostname: "{{ ludus_files_goad_hostname_override | default(ansible_hostname, true) | lower }}"
+
+    - name: Get GOAD file list for this host
+      ansible.builtin.set_fact:
+        _goad_file_list: "{{ ludus_files_goad[_goad_files_hostname] | default([]) }}"
+
+    - name: Create directories for GOAD files
+      ansible.windows.win_file:
+        path: "{{ dir_item }}"
+        state: directory
+      loop: >-
+        {{ _goad_file_list
+           | selectattr('create_dirs', 'defined')
+           | map(attribute='create_dirs')
+           | flatten
+           | unique
+           | list }}
+      loop_control:
+        loop_var: dir_item
+        label: "{{ dir_item }}"
+      when: _goad_file_list | length > 0
+
+    - name: Deploy GOAD files from role files/ directory
+      ansible.windows.win_copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+      loop: "{{ _goad_file_list | selectattr('src', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.description | default(item.dest) }}"
+      when: _goad_file_list | length > 0
+
+    - name: Deploy GOAD files with inline content
+      ansible.windows.win_copy:
+        content: "{{ item.content }}"
+        dest: "{{ item.dest }}"
+      loop: "{{ _goad_file_list | selectattr('content', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.description | default(item.dest) }}"
+      when: _goad_file_list | length > 0
+
+    - name: Log GOAD files deployed
+      ansible.builtin.debug:
+        msg: "Deployed {{ _goad_file_list | length }} GOAD file(s) for {{ _goad_files_hostname }}"
+      when: _goad_file_list | length > 0
+
+    - name: No GOAD files for this host
+      ansible.builtin.debug:
+        msg: "No GOAD files defined for hostname '{{ _goad_files_hostname }}' — skipping"
+      when: _goad_file_list | length == 0
+
+
+# =============================================================================
+# HONEYPOT MODE — Generate realistic bait files
+# =============================================================================
+
+- name: Deploy honeypot files
+  ansible.builtin.include_tasks: honeypot.yml
+  when: "'honeypot' in _files_active_modes and ludus_honeypot_enabled | default(true) | bool"
+
+# =============================================================================
+# BREADCRUMBS MODE — Drop credential hints and lateral movement artifacts
+# =============================================================================
+
+- name: Deploy breadcrumbs
+  ansible.builtin.include_tasks: breadcrumbs.yml
+  when: "'breadcrumbs' in _files_active_modes and ludus_breadcrumbs_enabled | default(true) | bool"
+
+# =============================================================================
+# SUMMARY
+# =============================================================================
+
+- name: Display deployment summary
+  ansible.builtin.debug:
+    msg: |
+      ============================================
+      ludus_files — {{ ansible_hostname }}
+      ============================================
+      Mode: {{ ludus_files_mode }}
+      Custom files: {{ ludus_files_custom | default([]) | length }}
+      GOAD files: {{ _goad_file_list | default([]) | length }}
+      Honeypot: {{ 'enabled' if ('honeypot' in _files_active_modes and ludus_honeypot_enabled | default(true)) else 'disabled' }}
+      Breadcrumbs: {{ 'enabled' if ('breadcrumbs' in _files_active_modes and ludus_breadcrumbs_enabled | default(true)) else 'disabled' }}
+      ============================================

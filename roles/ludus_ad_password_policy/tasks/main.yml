@@ -1,0 +1,170 @@
+---
+# ludus_ad_password_policy - Set AD domain password policy
+# Idempotent: checks current policy before applying changes
+
+# =============================================================================
+# DOMAIN CONFIGURATION
+# =============================================================================
+- name: Set domain facts
+  ansible.builtin.set_fact:
+    _ludus_domain_name: "{{ ludus_domain_fqdn | default(ludus_child_domain_fqdn) | default('') }}"
+
+- name: Validate domain name
+  ansible.builtin.assert:
+    that:
+      - _ludus_domain_name | length > 0
+    fail_msg: "Domain name not available. Ensure this VM has domain.fqdn set."
+
+# =============================================================================
+# BUILD POLICY CONFIGURATION
+# =============================================================================
+- name: Set policy from GOAD preset
+  ansible.builtin.set_fact:
+    _policy_config:
+      min_length: "{{ ludus_goad_password_policy.min_length }}"
+      complexity: "{{ ludus_goad_password_policy.complexity }}"
+      lockout_threshold: "{{ ludus_goad_password_policy.lockout_threshold }}"
+      lockout_duration: "{{ ludus_goad_password_policy.lockout_duration }}"
+      lockout_observation: "{{ ludus_goad_password_policy.lockout_observation }}"
+      history_count: "{{ ludus_goad_password_policy.history_count }}"
+      max_age_days: "{{ ludus_goad_password_policy.max_age_days }}"
+      min_age_days: "{{ ludus_goad_password_policy.min_age_days }}"
+  when: ludus_password_policy_mode == "goad"
+
+- name: Set policy from custom values
+  ansible.builtin.set_fact:
+    _policy_config:
+      min_length: "{{ ludus_password_policy_min_length }}"
+      complexity: "{{ ludus_password_policy_complexity }}"
+      lockout_threshold: "{{ ludus_password_policy_lockout_threshold }}"
+      lockout_duration: "{{ ludus_password_policy_lockout_duration }}"
+      lockout_observation: "{{ ludus_password_policy_lockout_observation }}"
+      history_count: "{{ ludus_password_policy_history_count }}"
+      max_age_days: "{{ ludus_password_policy_max_age_days }}"
+      min_age_days: "{{ ludus_password_policy_min_age_days }}"
+  when: ludus_password_policy_mode == "custom"
+
+- name: Display policy configuration
+  ansible.builtin.debug:
+    msg: |
+      ludus_ad_password_policy Configuration:
+        Mode: {{ ludus_password_policy_mode }}
+        Domain: {{ _ludus_domain_name }}
+        MinPasswordLength: {{ _policy_config.min_length }}
+        ComplexityEnabled: {{ _policy_config.complexity }}
+        LockoutThreshold: {{ _policy_config.lockout_threshold }}
+
+# =============================================================================
+# APPLY PASSWORD POLICY
+# =============================================================================
+- name: Configure domain password policy
+  ansible.windows.win_powershell:
+    script: |
+      [CmdletBinding()]
+      param (
+        [int]$MinPasswordLength,
+        [bool]$PasswordComplexity,
+        [int]$LockoutThreshold,
+        [string]$LockoutDuration,
+        [string]$LockoutObservation,
+        [int]$HistoryCount,
+        [int]$MaxAgeDays,
+        [int]$MinAgeDays,
+        [string]$DomainName
+      )
+
+      Import-Module ActiveDirectory
+
+      # Get current policy
+      $current = Get-ADDefaultDomainPasswordPolicy -Identity $DomainName
+
+      # Check if changes are needed
+      $needsChange = $false
+      if ($current.MinPasswordLength -ne $MinPasswordLength) { $needsChange = $true }
+      if ($current.ComplexityEnabled -ne $PasswordComplexity) { $needsChange = $true }
+      if ($current.LockoutThreshold -ne $LockoutThreshold) { $needsChange = $true }
+      if ($current.PasswordHistoryCount -ne $HistoryCount) { $needsChange = $true }
+
+      if ($needsChange) {
+        # Apply the password policy
+        Set-ADDefaultDomainPasswordPolicy `
+          -Identity $DomainName `
+          -MinPasswordLength $MinPasswordLength `
+          -ComplexityEnabled $PasswordComplexity `
+          -LockoutThreshold $LockoutThreshold `
+          -LockoutDuration $LockoutDuration `
+          -LockoutObservationWindow $LockoutObservation `
+          -PasswordHistoryCount $HistoryCount `
+          -MaxPasswordAge (New-TimeSpan -Days $MaxAgeDays) `
+          -MinPasswordAge (New-TimeSpan -Days $MinAgeDays)
+
+        # Verify the policy was applied
+        $updated = Get-ADDefaultDomainPasswordPolicy -Identity $DomainName
+        Write-Output "Password policy applied:"
+        Write-Output "  MinPasswordLength: $($updated.MinPasswordLength)"
+        Write-Output "  ComplexityEnabled: $($updated.ComplexityEnabled)"
+        Write-Output "  LockoutThreshold: $($updated.LockoutThreshold)"
+        Write-Output "  PasswordHistoryCount: $($updated.PasswordHistoryCount)"
+        $Ansible.Changed = $true
+      } else {
+        Write-Output "Password policy already configured correctly"
+        $Ansible.Changed = $false
+      }
+    parameters:
+      MinPasswordLength: "{{ _policy_config.min_length | int }}"
+      PasswordComplexity: "{{ _policy_config.complexity | bool }}"
+      LockoutThreshold: "{{ _policy_config.lockout_threshold | int }}"
+      LockoutDuration: "{{ _policy_config.lockout_duration }}"
+      LockoutObservation: "{{ _policy_config.lockout_observation }}"
+      HistoryCount: "{{ _policy_config.history_count | int }}"
+      MaxAgeDays: "{{ _policy_config.max_age_days | int }}"
+      MinAgeDays: "{{ _policy_config.min_age_days | int }}"
+      DomainName: "{{ _ludus_domain_name }}"
+  register: _policy_result
+
+# =============================================================================
+# WAIT FOR POLICY PROPAGATION
+# =============================================================================
+- name: Force AD replication and wait for policy propagation
+  ansible.windows.win_powershell:
+    script: |
+      [CmdletBinding()]
+      param (
+        [int]$WaitSeconds
+      )
+
+      Import-Module ActiveDirectory
+
+      # Force replication
+      try {
+        repadmin /syncall /AeD 2>$null
+      } catch {
+        Write-Output "Replication sync attempted (may not be available on all DCs)"
+      }
+
+      # Wait for policy to propagate
+      Write-Output "Waiting $WaitSeconds seconds for policy propagation..."
+      Start-Sleep -Seconds $WaitSeconds
+
+      # Verify policy is active
+      $policy = Get-ADDefaultDomainPasswordPolicy
+      Write-Output "Current policy:"
+      Write-Output "  MinPasswordLength: $($policy.MinPasswordLength)"
+      Write-Output "  ComplexityEnabled: $($policy.ComplexityEnabled)"
+      $Ansible.Changed = $false
+    parameters:
+      WaitSeconds: "{{ ludus_password_policy_wait_seconds | int }}"
+  when: 
+    - _policy_result.changed | default(false)
+    - ludus_password_policy_force_replication | bool
+
+# =============================================================================
+# SUMMARY
+# =============================================================================
+- name: Display summary
+  ansible.builtin.debug:
+    msg: |
+      ludus_ad_password_policy completed:
+        Domain: {{ _ludus_domain_name }}
+        Mode: {{ ludus_password_policy_mode }}
+        Policy changed: {{ _policy_result.changed | default(false) }}

@@ -1,0 +1,167 @@
+---
+# ludus_ad_laps — Configures Microsoft LAPS
+# Supports both DC-side (schema + GPO) and client-side (MSI install + move to OU) modes
+
+- name: Resolve domain FQDN for become credentials
+  ansible.builtin.set_fact:
+    _laps_domain_fqdn: >-
+      {{ hostvars[inventory_hostname]['ludus_domain_fqdn']
+         | default(ludus_laps_domain_fqdn)
+         | default(ludus_domain_fqdn | default('')) }}
+  # hostvars[inventory_hostname] ensures we resolve from the originating host,
+  # not the delegate target, which is critical for cross-VM delegation.
+  # Fallback chain: Ludus-injected hostvar → explicit role_var → direct variable
+
+- name: Create LAPS Organisational Unit
+  microsoft.ad.ou:
+    name: "Laps"
+    path: "{{ ludus_laps_ou | regex_replace('^OU=Laps,', '') }}"
+    state: present
+    protect_from_deletion: false
+  when: not (ludus_laps_client_only | bool)
+  vars:
+    ansible_become: true
+    ansible_become_method: runas
+    ansible_become_user: "{{ _laps_domain_fqdn }}\\{{ ludus_laps_domain_admin }}"
+    ansible_become_password: "{{ ludus_laps_domain_admin_password }}"
+    ansible_become_flags: "logon_type=interactive logon_flags=with_profile"
+
+- name: Install LAPS Management tools on DC
+  ansible.windows.win_package:
+    arguments: "ADDLOCAL=Management.PS,Management.ADMX ALLUSERS=1 /qn"
+    path: "{{ ludus_laps_msi_url }}"
+    state: present
+    creates_path: "%ProgramFiles%\\LAPS"
+  register: laps_install_dc
+  until: laps_install_dc is success
+  retries: 3
+  delay: 10
+  when: not (ludus_laps_client_only | bool)
+
+- name: Reboot DC after LAPS install if required
+  ansible.windows.win_reboot:
+    reboot_timeout: 600
+    post_reboot_delay: 60
+  when:
+    - not (ludus_laps_client_only | bool)
+    - laps_install_dc.reboot_required | default(false)
+
+- name: Extend AD schema and configure LAPS DACL + GPO on DC
+  ansible.windows.win_powershell:
+    script: |
+      [CmdletBinding()]
+      param (
+        [String]$LapsOU,
+        [String]$GpoName,
+        [String[]]$LapsReaders
+      )
+      Import-Module AdmPwd.PS -ErrorAction SilentlyContinue
+
+      # Extend schema if needed
+      try {
+        Update-AdmPwdADSchema -ErrorAction SilentlyContinue
+        Write-Output "LAPS schema updated"
+      } catch {
+        Write-Warning "Schema update: $_"
+      }
+
+      # Set self-write permission on OU (computers can write their own password)
+      try {
+        Set-AdmPwdComputerSelfPermission -OrgUnit $LapsOU
+        Write-Output "Set self-permission on $LapsOU"
+      } catch {
+        Write-Warning "Self-permission: $_"
+      }
+
+      # Set LAPS readers
+      foreach ($reader in $LapsReaders) {
+        try {
+          Set-AdmPwdReadPasswordPermission -OrgUnit $LapsOU -AllowedPrincipals $reader
+          Write-Output "Set read permission for $reader"
+        } catch {
+          Write-Warning "Read permission for ${reader}: $_"
+        }
+      }
+
+      # Create GPO if it doesn't exist
+      $gpo = Get-GPO -Name $GpoName -ErrorAction SilentlyContinue
+      if (-not $gpo) {
+        $gpo = New-GPO -Name $GpoName -Comment "LAPS GPO managed by Ansible"
+        New-GPLink -Name $GpoName -Target $LapsOU -Enforced Yes
+        Write-Output "Created and linked GPO: $GpoName"
+      }
+
+      # Configure GPO registry settings
+      Set-GPRegistryValue -Name $GpoName `
+        -Key "HKLM\Software\Policies\Microsoft Services\AdmPwd" `
+        -ValueName "AdmPwdEnabled" -Type DWord -Value 1
+      Set-GPRegistryValue -Name $GpoName `
+        -Key "HKLM\Software\Policies\Microsoft Services\AdmPwd" `
+        -ValueName "PasswordComplexity" -Type DWord -Value 4
+      Set-GPRegistryValue -Name $GpoName `
+        -Key "HKLM\Software\Policies\Microsoft Services\AdmPwd" `
+        -ValueName "PasswordLength" -Type DWord -Value 14
+      Set-GPRegistryValue -Name $GpoName `
+        -Key "HKLM\Software\Policies\Microsoft Services\AdmPwd" `
+        -ValueName "PasswordAgeDays" -Type DWord -Value 30
+
+      $Ansible.Changed = $true
+    parameters:
+      LapsOU: "{{ ludus_laps_ou }}"
+      GpoName: "{{ ludus_laps_gpo_name }}"
+      LapsReaders: "{{ ludus_laps_readers }}"
+  when: not (ludus_laps_client_only | bool)
+  vars:
+    ansible_become: true
+    ansible_become_method: runas
+    ansible_become_user: "{{ _laps_domain_fqdn }}\\{{ ludus_laps_domain_admin }}"
+    ansible_become_password: "{{ ludus_laps_domain_admin_password }}"
+    ansible_become_flags: "logon_type=interactive logon_flags=with_profile"
+
+# ============================================================
+# Client-side: install LAPS MSI and move to LAPS OU
+# ============================================================
+- name: Install LAPS client on member server
+  ansible.windows.win_package:
+    arguments: "ALLUSERS=1 /qn"
+    path: "{{ ludus_laps_msi_url }}"
+    state: present
+    creates_path: "%ProgramFiles%\\LAPS"
+  register: laps_client_install
+  until: laps_client_install is success
+  retries: 3
+  delay: 10
+  when: ludus_laps_client_only | bool
+
+# Move existing computer object to the LAPS OU
+# Cannot use microsoft.ad.computer here — it tries New-ADComputer which fails
+# because the computer account already exists from domain join. Use Move-ADObject instead.
+- name: Move computer to LAPS OU
+  ansible.windows.win_powershell:
+    script: |
+      param($ComputerName, $TargetOU)
+      Import-Module ActiveDirectory
+      try {
+          $computer = Get-ADComputer -Identity $ComputerName -ErrorAction Stop
+          # Check if already in the target OU
+          if ($computer.DistinguishedName -like "*$TargetOU*") {
+              Write-Output "ALREADY_IN_OU: $ComputerName is already in $TargetOU"
+          } else {
+              Move-ADObject -Identity $computer.DistinguishedName -TargetPath $TargetOU -ErrorAction Stop
+              Write-Output "MOVED: $ComputerName to $TargetOU"
+          }
+          $Ansible.Changed = $computer.DistinguishedName -notlike "*$TargetOU*"
+      } catch {
+          Write-Error "FAILED to move $ComputerName to ${TargetOU}: $($_.Exception.Message)"
+      }
+    parameters:
+      ComputerName: "{{ ansible_hostname }}"
+      TargetOU: "{{ ludus_laps_ou }}"
+  when: ludus_laps_client_only | bool
+  delegate_to: "{{ ludus_dc_vm_name | default(omit) }}"
+  vars:
+    ansible_become: true
+    ansible_become_method: runas
+    ansible_become_user: "{{ _laps_domain_fqdn }}\\{{ ludus_laps_domain_admin }}"
+    ansible_become_password: "{{ ludus_laps_domain_admin_password }}"
+    ansible_become_flags: "logon_type=interactive logon_flags=with_profile"

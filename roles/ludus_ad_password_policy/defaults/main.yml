@@ -1,0 +1,44 @@
+---
+# ludus_ad_password_policy - Set AD domain password policy
+# All values configurable via role_vars in Ludus range config
+
+# =============================================================================
+# MODE SELECTION
+# =============================================================================
+# Options: "goad" | "custom"
+#   - "goad"   : Use weak GOAD password policy (5 chars, no complexity)
+#   - "custom" : Use custom values from ludus_password_policy_*
+ludus_password_policy_mode: "goad"
+
+# =============================================================================
+# CUSTOM PASSWORD POLICY
+# Used when ludus_password_policy_mode is "custom"
+# =============================================================================
+ludus_password_policy_min_length: 7
+ludus_password_policy_complexity: true
+ludus_password_policy_lockout_threshold: 5
+ludus_password_policy_lockout_duration: "00:30:00"
+ludus_password_policy_lockout_observation: "00:30:00"
+ludus_password_policy_history_count: 24
+ludus_password_policy_max_age_days: 90
+ludus_password_policy_min_age_days: 1
+
+# =============================================================================
+# GOAD PRESET - Weak password policy for attack scenarios
+# =============================================================================
+ludus_goad_password_policy:
+  min_length: 5
+  complexity: false
+  lockout_threshold: 5
+  lockout_duration: "00:05:00"
+  lockout_observation: "00:05:00"
+  history_count: 0
+  max_age_days: 0
+  min_age_days: 0
+
+# =============================================================================
+# POLICY PROPAGATION
+# Wait time after applying policy to ensure it takes effect
+# =============================================================================
+ludus_password_policy_wait_seconds: 15
+ludus_password_policy_force_replication: true

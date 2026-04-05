@@ -1,0 +1,39 @@
+---
+### REQUIRED
+namespace: badsectorlabs
+name: ludus_windows_utils
+version: 1.0.0
+readme: README.md
+
+authors:
+  - ar0dd
+
+description: >-
+  A collection of Ansible roles for configuring Windows and Active Directory
+  environments in Ludus cyber ranges. Includes roles for AD ACLs, LAPS,
+  child domains, forest trusts, misconfigurations, SMB shares, password policies,
+  bulk AD content, gMSA, anonymous RPC, IIS WebDAV, and file deployment.
+
+license:
+  - GPL-3.0-or-later
+
+tags:
+  - windows
+  - active_directory
+  - ludus
+  - security
+  - cyber_range
+  - pentest
+
+dependencies: {}
+
+repository: https://github.com/badsectorlabs/ludus_windows_utils
+documentation: https://github.com/badsectorlabs/ludus_windows_utils/blob/main/README.md
+homepage: https://ludus.cloud
+issues: https://github.com/badsectorlabs/ludus_windows_utils/issues
+
+build_ignore:
+  - "*.tar.gz"
+  - .git
+  - .github
+  - .gitignore

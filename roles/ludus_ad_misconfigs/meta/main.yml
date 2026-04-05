@@ -1,0 +1,29 @@
+---
+galaxy_info:
+  role_name: ludus_ad_misconfigs
+  author: Bad Sector Labs
+  description: Configure Windows/AD security misconfigurations for attack labs (GOAD, custom scenarios)
+  license: MIT
+  version: "0.8.0"
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Windows
+      versions:
+        - "2019"
+        - "2022"
+  galaxy_tags:
+    - windows
+    - active_directory
+    - security
+    - ludus
+    - goad
+    - attack_lab
+    - misconfiguration
+    - delegation
+    - kerberos
+    - ntlm
+
+dependencies: []
+# Required collections (should already be installed on Ludus):
+# - ansible.windows
+# - community.windows

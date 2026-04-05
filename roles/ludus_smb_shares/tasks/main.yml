@@ -1,0 +1,217 @@
+---
+# ludus_smb_shares - SMB Share Configuration
+# Main tasks file
+#
+# Based on GOAD's shares + openshares roles:
+# https://github.com/Orange-Cyberdefense/GOAD/tree/main/ansible/roles/vulns/shares
+# https://github.com/Orange-Cyberdefense/GOAD/tree/main/ansible/roles/vulns/openshares
+
+# =============================================================================
+# GOAD MODE CONFIGURATION
+# =============================================================================
+
+- name: Apply GOAD mode settings when mode is goad
+  when: ludus_smb_shares_mode == "goad"
+  block:
+    - name: Get hostname for GOAD config lookup
+      ansible.builtin.set_fact:
+        _shares_hostname: "{{ ludus_smb_shares_hostname_override | default(ansible_hostname, true) | lower }}"
+
+    - name: Check if GOAD config exists for this host
+      ansible.builtin.set_fact:
+        _goad_shares_config: "{{ ludus_goad_smb_shares[_shares_hostname] | default([]) }}"
+
+    - name: Apply GOAD share settings
+      ansible.builtin.set_fact:
+        ludus_smb_shares: "{{ _goad_shares_config }}"
+      when: _goad_shares_config | length > 0
+
+# =============================================================================
+# ANONYMOUS ACCESS CONFIGURATION
+# Matches GOAD openshares role — enables guest/anonymous SMB access
+# Required for null-session share enumeration and anonymous read/write
+# =============================================================================
+
+- name: Configure anonymous SMB access
+  when: ludus_smb_shares | selectattr('allow_anonymous', 'defined') | selectattr('allow_anonymous', 'equalto', true) | list | length > 0
+  block:
+    # GOAD: net user guest /active:yes
+    - name: Activate guest account for anonymous share access
+      ansible.windows.win_user:
+        name: Guest
+        account_disabled: false
+        state: present
+
+    # GOAD: AllowInsecureGuestAuth = 1 (required for SMB2+ anonymous access)
+    - name: Allow insecure guest auth in SMB client
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters
+        name: AllowInsecureGuestAuth
+        data: 1
+        type: dword
+        state: present
+
+    # Required for server-side anonymous access
+    - name: Disable RestrictNullSessAccess for anonymous shares
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Services\LanManServer\Parameters
+        name: RestrictNullSessAccess
+        data: 0
+        type: dword
+        state: present
+
+    # Register anonymous share names in NullSessionShares
+    - name: Configure NullSessionShares registry for anonymous access
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Services\LanManServer\Parameters
+        name: NullSessionShares
+        data: "{{ ludus_smb_shares | selectattr('allow_anonymous', 'defined') | selectattr('allow_anonymous', 'equalto', true) | map(attribute='name') | list }}"
+        type: multistring
+        state: present
+
+    # Allow Everyone to include anonymous users in security policy
+    - name: Set EveryoneIncludesAnonymous security policy
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Control\Lsa
+        name: EveryoneIncludesAnonymous
+        data: 1
+        type: dword
+        state: present
+
+# =============================================================================
+# SHARE CREATION — Uses ansible.windows.win_share (matches GOAD approach)
+# =============================================================================
+
+- name: Configure SMB shares
+  when: ludus_smb_shares | length > 0
+  block:
+    - name: Display shares to be configured
+      ansible.builtin.debug:
+        msg: "Configuring {{ ludus_smb_shares | length }} SMB share(s)"
+
+    # Defensive check: if any share references domain groups (e.g., "Domain Users"),
+    # the secure channel must be healthy or SID resolution will fail with
+    # "The trust relationship between this workstation and the primary domain failed."
+    # This can happen after reboots from other roles (e.g., ludus_ad_misconfigs WebDAV feature).
+    - name: Verify and repair domain secure channel before share creation
+      ansible.windows.win_powershell:
+        script: |
+          # Only check if this machine is domain-joined
+          $cs = Get-WmiObject Win32_ComputerSystem
+          if ($cs.PartOfDomain) {
+              $healthy = Test-ComputerSecureChannel -ErrorAction SilentlyContinue
+              if (-not $healthy) {
+                  Write-Output "BROKEN: Secure channel is broken, attempting repair..."
+                  try {
+                      Test-ComputerSecureChannel -Repair -ErrorAction Stop
+                      Write-Output "REPAIRED: Secure channel repaired successfully"
+                      $Ansible.Changed = $true
+                  } catch {
+                      Write-Error "FAILED: Could not repair secure channel: $($_.Exception.Message)"
+                  }
+              } else {
+                  Write-Output "OK: Secure channel is healthy"
+              }
+          } else {
+              Write-Output "SKIP: Machine is not domain-joined"
+          }
+      register: _smb_secure_channel
+
+    # Create directories (skip SYSVOL and CertEnroll — they already exist)
+    - name: Create share directories
+      ansible.windows.win_file:
+        path: "{{ item.path }}"
+        state: directory
+      loop: "{{ ludus_smb_shares }}"
+      loop_control:
+        label: "{{ item.name }} -> {{ item.path }}"
+      when:
+        - "'SYSVOL' not in item.path"
+        - "'CertSrv' not in item.path"
+
+    # Use win_share module (matches GOAD approach — much more reliable than PowerShell)
+    - name: Create SMB shares
+      ansible.windows.win_share:
+        name: "{{ item.name }}"
+        path: "{{ item.path }}"
+        description: "{{ item.description | default(item.name) }}"
+        list: true
+        full: "{{ item.full_access | default(['Administrators']) | join(',') }}"
+        change: "{{ item.change_access | default([]) | join(',') }}"
+        read: "{{ item.read_access | default([]) | join(',') }}"
+        deny: "{{ item.no_access | default([]) | join(',') }}"
+        state: present
+      loop: "{{ ludus_smb_shares }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: _share_result
+
+    # Set NTFS permissions on share directories (matches GOAD perm.yml approach)
+    # Full access users
+    - name: Set NTFS full access permissions
+      ansible.windows.win_acl:
+        path: "{{ item.0.path }}"
+        user: "{{ item.1 }}"
+        rights: FullControl
+        type: allow
+        state: present
+        inherit: ContainerInherit, ObjectInherit
+      loop: "{{ ludus_smb_shares | subelements('full_access', skip_missing=True) }}"
+      loop_control:
+        label: "{{ item.0.name }} -> {{ item.1 }} (FullControl)"
+      when:
+        - "'SYSVOL' not in item.0.path"
+        - item.1 | length > 0
+
+    # Change access users
+    - name: Set NTFS change access permissions
+      ansible.windows.win_acl:
+        path: "{{ item.0.path }}"
+        user: "{{ item.1 }}"
+        rights: Read, Write, Modify, Delete
+        type: allow
+        state: present
+        inherit: ContainerInherit, ObjectInherit
+      loop: "{{ ludus_smb_shares | subelements('change_access', skip_missing=True) }}"
+      loop_control:
+        label: "{{ item.0.name }} -> {{ item.1 }} (Change)"
+      when:
+        - "'SYSVOL' not in item.0.path"
+        - item.1 | length > 0
+
+    # Read access users
+    - name: Set NTFS read access permissions
+      ansible.windows.win_acl:
+        path: "{{ item.0.path }}"
+        user: "{{ item.1 }}"
+        rights: Read
+        type: allow
+        state: present
+        inherit: ContainerInherit, ObjectInherit
+      loop: "{{ ludus_smb_shares | subelements('read_access', skip_missing=True) }}"
+      loop_control:
+        label: "{{ item.0.name }} -> {{ item.1 }} (Read)"
+      when:
+        - "'SYSVOL' not in item.0.path"
+        - item.1 | length > 0
+
+# =============================================================================
+# SUMMARY
+# =============================================================================
+
+- name: Display SMB share configuration summary
+  ansible.builtin.debug:
+    msg: |
+      ============================================
+      SMB Share Configuration for {{ ansible_hostname }}
+      ============================================
+      Shares Configured: {{ ludus_smb_shares | length }}
+      {% for share in ludus_smb_shares %}
+      - {{ share.name }} -> {{ share.path }}
+        Full Access: {{ share.full_access | default([]) | join(', ') | default('None') }}
+        Read Access: {{ share.read_access | default([]) | join(', ') | default('None') }}
+        Anonymous: {{ share.allow_anonymous | default(false) }}
+      {% endfor %}
+      Anonymous Shares: {{ ludus_smb_shares | selectattr('allow_anonymous', 'defined') | selectattr('allow_anonymous', 'equalto', true) | list | length }}
+      ============================================
+  when: ludus_smb_shares | length > 0

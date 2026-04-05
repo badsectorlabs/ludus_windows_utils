@@ -1,0 +1,69 @@
+---
+# ludus_iis_webdav - IIS and/or WebDAV configuration
+#
+# This role supports three modes:
+#   1. "client" (GOAD default) — Installs WebDAV-Redirector feature + starts WebClient
+#      service. Used for NTLM coercion attacks (PetitPotam, PrinterBug + relay).
+#   2. "server" — Installs full IIS + WebDAV Publishing feature with authoring rules.
+#      Used for hosting WebDAV-enabled web servers in the lab.
+#   3. "both"   — Install both client and server features.
+#
+# For GOAD castelblack: Use "server" mode with ludus_iis_install_aspnet: true
+# and ludus_iis_content_mode: "goad" to get the full GOAD attack path.
+#
+# Ludus-provided variables used automatically:
+#   - ludus_domain_fqdn (from range config)
+#   - defaults.ad_domain_admin / defaults.ad_domain_admin_password
+
+# =============================================================================
+# MODE SELECTION
+# =============================================================================
+# "client" = WebDAV-Redirector only (GOAD-compatible, for WebClient/NTLM coercion)
+# "server" = Full IIS + WebDAV Publishing (for hosting WebDAV shares)
+# "both"   = Install both client and server features
+ludus_iis_webdav_mode: "client"
+
+# =============================================================================
+# CLIENT MODE OPTIONS (WebDAV-Redirector / WebClient service)
+# =============================================================================
+# Start the WebClient service automatically (needed for NTLM coercion)
+ludus_webdav_client_start_service: true
+
+# =============================================================================
+# SERVER MODE OPTIONS (IIS + WebDAV Publishing)
+# =============================================================================
+# Domain admin credentials (for WebDAV configuration requiring elevated access)
+ludus_iis_domain_admin: "{{ defaults.ad_domain_admin | default('domainadmin') }}"
+ludus_iis_domain_admin_password: "{{ defaults.ad_domain_admin_password | default('password') }}"
+
+# --- ASP.NET Features ---
+# GOAD requires ASP.NET 4.5 for the webshell upload attack path.
+# Without this, uploaded .aspx files won't execute.
+# When true: installs Web-Asp-Net45, Web-Net-Ext45, Web-ISAPI-Ext, Web-ISAPI-Filter
+# When false: bare IIS (static files + WebDAV only, no ASP.NET execution)
+ludus_iis_install_aspnet: false
+
+# --- IIS 6 Compatibility Features ---
+# GOAD installs these for legacy compatibility. Usually not needed.
+# When true: installs Web-Mgmt-Compat, Web-Metabase, Web-Lgcy-Mgmt-Console,
+#            Web-Lgcy-Scripting, Web-WMI
+ludus_iis_install_legacy_compat: false
+
+# --- Content Deployment ---
+# "none"   = Don't deploy any content (bare IIS default page)
+# "custom" = Deploy from role's files/wwwroot/ directory
+# "goad"   = Download GOAD ASP.NET file upload app from GitHub
+#            (Default.aspx + WebApp.dll + roslyn compiler)
+ludus_iis_content_mode: "none"
+
+# Upload directory configuration (leave empty to skip)
+ludus_iis_upload_dir: ""                    # e.g., "C:\\inetpub\\wwwroot\\upload"
+ludus_iis_upload_dir_user: "IIS_IUSRS"
+ludus_iis_upload_dir_rights: "FullControl"
+
+# WebDAV authoring rules for the Default Web Site
+# Each rule specifies: users, path, access (Read, Write, Source, or combinations)
+ludus_iis_webdav_authoring_rules:
+  - users: "*"
+    path: "*"
+    access: "Read,Write,Source"

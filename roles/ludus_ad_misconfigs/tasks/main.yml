@@ -1,0 +1,900 @@
+---
+# ludus_ad_misconfigs - Main tasks file
+# Applies Windows/AD misconfigurations for attack lab scenarios
+
+- name: Set GOAD mode variables when mode is goad
+  when: ludus_misconfigs_mode == "goad"
+  block:
+    - name: Get hostname for GOAD config lookup
+      ansible.builtin.set_fact:
+        _hostname: "{{ ludus_misconfigs_hostname_override | default(ansible_hostname, true) | lower }}"
+
+    - name: Check if GOAD config exists for this host
+      ansible.builtin.set_fact:
+        _goad_config: "{{ ludus_goad_misconfigs[_hostname] | default({}) }}"
+
+    - name: Apply GOAD firewall setting
+      ansible.builtin.set_fact:
+        ludus_firewall_disabled: "{{ _goad_config.firewall_disabled | default(false) }}"
+      when: _goad_config.firewall_disabled is defined
+
+    - name: Apply GOAD LLMNR setting
+      ansible.builtin.set_fact:
+        ludus_llmnr_enabled: "{{ _goad_config.llmnr_enabled | default(false) }}"
+      when: _goad_config.llmnr_enabled is defined
+
+    - name: Apply GOAD NBT-NS setting
+      ansible.builtin.set_fact:
+        ludus_nbt_ns_enabled: "{{ _goad_config.nbt_ns_enabled | default(false) }}"
+      when: _goad_config.nbt_ns_enabled is defined
+
+    - name: Apply GOAD NTLM downgrade settings
+      ansible.builtin.set_fact:
+        ludus_ntlm_downgrade_enabled: "{{ _goad_config.ntlm_downgrade.enabled | default(false) }}"
+        ludus_ntlm_lm_compatibility_level: "{{ _goad_config.ntlm_downgrade.lm_compatibility_level | default(2) }}"
+      when: _goad_config.ntlm_downgrade is defined
+
+    - name: Apply GOAD LSA PPL setting
+      ansible.builtin.set_fact:
+        ludus_lsa_ppl_enabled: "{{ _goad_config.lsa_ppl_enabled | default(false) }}"
+      when: _goad_config.lsa_ppl_enabled is defined
+
+    - name: Apply GOAD autologon settings
+      ansible.builtin.set_fact:
+        ludus_autologon_enabled: "{{ _goad_config.autologon.enabled | default(false) }}"
+        ludus_autologon_user: "{{ _goad_config.autologon.user | default('') }}"
+        ludus_autologon_password: "{{ _goad_config.autologon.password | default('') }}"
+        ludus_autologon_domain: "{{ _goad_config.autologon.domain | default('') }}"
+      when: _goad_config.autologon is defined
+
+    - name: Apply GOAD credential manager entries
+      ansible.builtin.set_fact:
+        ludus_credential_manager_entries: "{{ _goad_config.credential_manager | default([]) }}"
+      when: _goad_config.credential_manager is defined
+
+    - name: Apply GOAD AS-REP roast users
+      ansible.builtin.set_fact:
+        ludus_asrep_roast_users: "{{ _goad_config.asrep_roast_users | default([]) }}"
+      when: _goad_config.asrep_roast_users is defined
+
+    - name: Apply GOAD unconstrained delegation users
+      ansible.builtin.set_fact:
+        ludus_unconstrained_delegation_users: "{{ _goad_config.unconstrained_delegation_users | default([]) }}"
+      when: _goad_config.unconstrained_delegation_users is defined
+
+    - name: Apply GOAD constrained delegation (any) settings
+      ansible.builtin.set_fact:
+        ludus_constrained_delegation_any: "{{ _goad_config.constrained_delegation_any | default([]) }}"
+      when: _goad_config.constrained_delegation_any is defined
+
+    - name: Apply GOAD constrained delegation (kerb only) settings
+      ansible.builtin.set_fact:
+        ludus_constrained_delegation_kerb_only: "{{ _goad_config.constrained_delegation_kerb_only | default([]) }}"
+      when: _goad_config.constrained_delegation_kerb_only is defined
+
+    - name: Apply GOAD account not delegated settings
+      ansible.builtin.set_fact:
+        ludus_account_not_delegated: "{{ _goad_config.account_not_delegated | default([]) }}"
+      when: _goad_config.account_not_delegated is defined
+
+    - name: Apply GOAD scheduled tasks
+      ansible.builtin.set_fact:
+        ludus_scheduled_tasks: "{{ _goad_config.scheduled_tasks | default([]) }}"
+      when: _goad_config.scheduled_tasks is defined
+
+    - name: Apply GOAD GPO abuse settings
+      ansible.builtin.set_fact:
+        ludus_gpo_abuse_enabled: "{{ _goad_config.gpo_abuse.enabled | default(false) }}"
+        ludus_gpo_name: "{{ _goad_config.gpo_abuse.name | default('') }}"
+        ludus_gpo_link_target: "{{ _goad_config.gpo_abuse.link_target | default('') }}"
+        ludus_gpo_editors: "{{ _goad_config.gpo_abuse.editors | default([]) }}"
+      when: _goad_config.gpo_abuse is defined
+
+    - name: Apply GOAD SMB signing setting
+      ansible.builtin.set_fact:
+        ludus_smb_signing_disabled: "{{ _goad_config.smb_signing_disabled | default(false) }}"
+      when: _goad_config.smb_signing_disabled is defined
+
+    - name: Apply GOAD Print Spooler setting
+      ansible.builtin.set_fact:
+        ludus_print_spooler_enabled: "{{ _goad_config.print_spooler_enabled | default(false) }}"
+      when: _goad_config.print_spooler_enabled is defined
+
+    - name: Apply GOAD WebClient setting
+      ansible.builtin.set_fact:
+        ludus_webclient_enabled: "{{ _goad_config.webclient_enabled | default(false) }}"
+      when: _goad_config.webclient_enabled is defined
+
+    - name: Apply GOAD local groups setting
+      ansible.builtin.set_fact:
+        ludus_local_groups: "{{ _goad_config.local_groups | default([]) }}"
+      when: _goad_config.local_groups is defined
+
+# ============================================================================
+# LOCAL GROUP MEMBERSHIPS (Administrators, Remote Desktop Users, etc.)
+# ============================================================================
+
+- name: Configure local group memberships
+  when: ludus_local_groups | default([]) | length > 0
+  block:
+    - name: Add members to local groups
+      ansible.windows.win_group_membership:
+        name: "{{ item.0.group }}"
+        members: "{{ item.1 }}"
+        state: present
+      loop: "{{ ludus_local_groups | subelements('members') }}"
+      loop_control:
+        label: "{{ item.1 }} -> {{ item.0.group }}"
+      register: _local_group_result
+      ignore_errors: true
+
+    - name: Log local group memberships
+      ansible.builtin.debug:
+        msg: "Configured {{ ludus_local_groups | length }} local group(s) with members"
+
+# ============================================================================
+# FIREWALL CONFIGURATION
+# ============================================================================
+
+- name: Disable Windows Firewall
+  when: ludus_firewall_disabled | bool
+  block:
+    - name: Disable Windows Firewall for all profiles
+      community.windows.win_firewall:
+        state: disabled
+        profiles: "{{ ludus_firewall_profiles }}"
+      register: _firewall_result
+
+    - name: Log firewall status
+      ansible.builtin.debug:
+        msg: "Windows Firewall disabled for profiles: {{ ludus_firewall_profiles }}"
+
+# ============================================================================
+# LLMNR CONFIGURATION
+# ============================================================================
+
+- name: Enable LLMNR for Responder attacks
+  when: ludus_llmnr_enabled | bool
+  block:
+    - name: Enable LLMNR via registry (EnableMulticast = 1)
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient
+        name: EnableMulticast
+        data: 1
+        type: dword
+        state: present
+
+    - name: Log LLMNR enabled
+      ansible.builtin.debug:
+        msg: "LLMNR enabled (EnableMulticast = 1)"
+
+# ============================================================================
+# NBT-NS CONFIGURATION
+# ============================================================================
+
+- name: Enable NBT-NS for Responder attacks
+  when: ludus_nbt_ns_enabled | bool
+  block:
+    - name: Enable NBT-NS via registry (NodeType)
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Services\NetBT\Parameters
+        name: NodeType
+        data: "{{ ludus_nbt_ns_node_type | int }}"
+        type: dword
+        state: present
+
+    - name: Log NBT-NS enabled
+      ansible.builtin.debug:
+        msg: "NBT-NS enabled (NodeType = {{ ludus_nbt_ns_node_type }})"
+
+# ============================================================================
+# NTLM DOWNGRADE CONFIGURATION
+# ============================================================================
+
+- name: Configure NTLM downgrade
+  when: ludus_ntlm_downgrade_enabled | bool
+  block:
+    - name: Set LmCompatibilityLevel for NTLM downgrade
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Control\Lsa
+        name: LmCompatibilityLevel
+        data: "{{ ludus_ntlm_lm_compatibility_level | int }}"
+        type: dword
+        state: present
+
+    - name: Log NTLM downgrade
+      ansible.builtin.debug:
+        msg: "NTLM downgrade configured (LmCompatibilityLevel = {{ ludus_ntlm_lm_compatibility_level }})"
+
+# ============================================================================
+# LSA PROTECTION (PPL)
+# ============================================================================
+
+- name: Enable LSA Protection (RunAsPPL)
+  when: ludus_lsa_ppl_enabled | bool
+  block:
+    - name: Enable RunAsPPL for LSA protection
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Control\Lsa
+        name: RunAsPPL
+        data: 1
+        type: dword
+        state: present
+
+    - name: Log LSA PPL enabled
+      ansible.builtin.debug:
+        msg: "LSA Protection (RunAsPPL) enabled - requires reboot"
+
+# ============================================================================
+# AUTOLOGON CONFIGURATION
+# ============================================================================
+
+- name: Configure automatic login
+  when: ludus_autologon_enabled | bool and ludus_autologon_user | length > 0
+  block:
+    - name: Enable automatic login
+      community.windows.win_auto_logon:
+        username: "{{ ludus_autologon_user }}"
+        password: "{{ ludus_autologon_password }}"
+        logon_count: 999
+        state: present
+
+    - name: Set default domain for autologon
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon
+        name: DefaultDomainName
+        data: "{{ ludus_autologon_domain }}"
+        type: string
+        state: present
+      when: ludus_autologon_domain | length > 0
+
+    - name: Log autologon configured
+      ansible.builtin.debug:
+        msg: "Autologon configured for {{ ludus_autologon_domain }}\\{{ ludus_autologon_user }}"
+
+# ============================================================================
+# CREDENTIAL MANAGER
+# ============================================================================
+
+- name: Add credentials to Credential Manager
+  when: ludus_credential_manager_entries | length > 0
+  block:
+    # Windows Credential Manager is per-user, DPAPI-encrypted. Neither cmdkey nor
+    # CredWrite work from WinRM/SYSTEM sessions (ERROR_NO_SUCH_LOGON_SESSION).
+    # Solution: create a one-shot scheduled task that runs as the target user,
+    # executes cmdkey, then self-destructs.
+    - name: Store credentials in Credential Manager via one-shot scheduled task
+      ansible.windows.win_powershell:
+        script: |
+          param($Target, $CredUsername, $CredPassword, $RunAsUser, $RunAsPassword)
+          $taskName = "LudusCredStore_$($Target -replace '[^a-zA-Z0-9]','_')"
+          try {
+              # Clean up any previous run
+              $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+              if ($existing) { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false }
+
+              # cmdkey command to store the credential
+              $cmdArgs = "/generic:$Target /user:$CredUsername /pass:$CredPassword"
+              $action = New-ScheduledTaskAction -Execute "cmdkey.exe" -Argument $cmdArgs
+              $principal = New-ScheduledTaskPrincipal -UserId $RunAsUser -LogonType Password -RunLevel Highest
+              $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+
+              $task = New-ScheduledTask -Action $action -Principal $principal -Settings $settings
+              Register-ScheduledTask -TaskName $taskName -InputObject $task `
+                  -User $RunAsUser -Password $RunAsPassword -Force | Out-Null
+
+              # Run immediately and wait
+              Start-ScheduledTask -TaskName $taskName
+              $timeout = 30
+              $elapsed = 0
+              while ($elapsed -lt $timeout) {
+                  Start-Sleep -Seconds 2
+                  $elapsed += 2
+                  $info = Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction SilentlyContinue
+                  if ($info.LastTaskResult -ne 267009) { break }  # 267009 = still running
+              }
+
+              $info = Get-ScheduledTaskInfo -TaskName $taskName
+              # Clean up the task
+              Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+
+              if ($info.LastTaskResult -eq 0) {
+                  Write-Output "SUCCESS: Credential for $Target stored in $RunAsUser vault"
+                  $Ansible.Changed = $true
+              } else {
+                  Write-Output "WARNING: Task completed with exit code $($info.LastTaskResult)"
+              }
+          } catch {
+              # Clean up on error
+              Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+              Write-Error "FAILED: $($_.Exception.Message)"
+          }
+        parameters:
+          Target: "{{ item.target }}"
+          CredUsername: "{{ item.username }}"
+          CredPassword: "{{ item.password }}"
+          RunAsUser: "{{ item.run_as_user | default(item.username) }}"
+          RunAsPassword: "{{ item.run_as_password | default(item.password) }}"
+      loop: "{{ ludus_credential_manager_entries }}"
+      loop_control:
+        label: "{{ item.target }}"
+      register: _cred_result
+      ignore_errors: true
+
+    - name: Log credential manager entries
+      ansible.builtin.debug:
+        msg: "Added {{ ludus_credential_manager_entries | length }} credential(s) to Credential Manager"
+
+# ============================================================================
+# AS-REP ROASTING - DoesNotRequirePreAuth
+# ============================================================================
+
+- name: Configure AS-REP roastable accounts
+  when: ludus_asrep_roast_users | length > 0
+  block:
+    - name: Enable DoesNotRequirePreAuth for AS-REP roasting targets
+      ansible.windows.win_powershell:
+        script: |
+          param($UserName, $DomainName)
+          Import-Module ActiveDirectory
+          try {
+              $user = Get-ADUser -Identity $UserName -Server $DomainName -ErrorAction Stop
+              Set-ADAccountControl -Identity $UserName -Server $DomainName -DoesNotRequirePreAuth $true
+              Write-Output "SUCCESS: $UserName DoesNotRequirePreAuth enabled"
+          } catch {
+              Write-Error "FAILED: $UserName - $($_.Exception.Message)"
+          }
+        parameters:
+          UserName: "{{ item.name }}"
+          DomainName: "{{ item.domain }}"
+      loop: "{{ ludus_asrep_roast_users }}"
+      loop_control:
+        label: "{{ item.name }}@{{ item.domain }}"
+      changed_when: "'SUCCESS' in _asrep_result.output | default('')"
+      register: _asrep_result
+
+# ============================================================================
+# UNCONSTRAINED DELEGATION - Users
+# ============================================================================
+
+- name: Configure unconstrained delegation for users
+  when: ludus_unconstrained_delegation_users | length > 0
+  block:
+    - name: Enable TrustedForDelegation for unconstrained delegation users
+      ansible.windows.win_powershell:
+        script: |
+          param($UserName, $DomainName)
+          Import-Module ActiveDirectory
+          try {
+              Set-ADAccountControl -Identity $UserName -Server $DomainName -TrustedForDelegation $true
+              Write-Output "SUCCESS: $UserName TrustedForDelegation enabled"
+          } catch {
+              Write-Error "FAILED: $UserName - $($_.Exception.Message)"
+          }
+        parameters:
+          UserName: "{{ item.name }}"
+          DomainName: "{{ item.domain }}"
+      loop: "{{ ludus_unconstrained_delegation_users }}"
+      loop_control:
+        label: "{{ item.name }}@{{ item.domain }}"
+      changed_when: "'SUCCESS' in _unconstrained_user_result.output | default('')"
+      register: _unconstrained_user_result
+
+# ============================================================================
+# CONSTRAINED DELEGATION - Any Authentication (Protocol Transition)
+# ============================================================================
+
+- name: Configure constrained delegation with protocol transition
+  when: ludus_constrained_delegation_any | length > 0
+  block:
+    - name: Configure constrained delegation (any auth) for users
+      ansible.windows.win_powershell:
+        script: |
+          param($UserName, $DomainName, $SPNs, $AllowedToDelegateTo)
+          Import-Module ActiveDirectory
+          try {
+              # Add SPNs if specified (skip empty strings from Ansible join)
+              if ($SPNs -and $SPNs.Trim()) {
+                  $spnArray = @($SPNs -split ',' | Where-Object { $_.Trim() })
+                  if ($spnArray.Count -gt 0) {
+                      Set-ADUser -Identity $UserName -Server $DomainName -ServicePrincipalNames @{Add=$spnArray}
+                  }
+              }
+              
+              # Enable TrustedToAuthForDelegation (protocol transition)
+              Set-ADAccountControl -Identity $UserName -Server $DomainName -TrustedToAuthForDelegation $true
+              
+              # Set msDS-AllowedToDelegateTo (use -Replace for idempotency on re-runs)
+              # Must cast to [string[]] — Where-Object returns PSObject which AD cmdlets reject
+              if ($AllowedToDelegateTo -and $AllowedToDelegateTo.Trim()) {
+                  [string[]]$delegateTo = @($AllowedToDelegateTo -split ',' | Where-Object { $_.Trim() })
+                  if ($delegateTo.Count -gt 0) {
+                      Set-ADUser -Identity $UserName -Server $DomainName -Replace @{'msDS-AllowedToDelegateTo'=$delegateTo}
+                  }
+              }
+              
+              Write-Output "SUCCESS: $UserName constrained delegation (any) configured"
+          } catch {
+              Write-Error "FAILED: $UserName - $($_.Exception.Message)"
+          }
+        parameters:
+          UserName: "{{ item.name }}"
+          DomainName: "{{ item.domain }}"
+          SPNs: "{{ item.spns | default([]) | join(',') }}"
+          AllowedToDelegateTo: "{{ item.allowed_to_delegate | default([]) | join(',') }}"
+      loop: "{{ ludus_constrained_delegation_any }}"
+      loop_control:
+        label: "{{ item.name }}@{{ item.domain }}"
+      changed_when: "'SUCCESS' in _constrained_any_result.output | default('')"
+      register: _constrained_any_result
+
+# ============================================================================
+# CONSTRAINED DELEGATION - Kerberos Only (No Protocol Transition)
+# ============================================================================
+
+- name: Configure constrained delegation Kerberos only
+  when: ludus_constrained_delegation_kerb_only | length > 0
+  block:
+    - name: Configure constrained delegation (kerb only) for users/computers
+      ansible.windows.win_powershell:
+        script: |
+          param($Identity, $DomainName, $ObjectType, $SPNs, $AllowedToDelegateTo)
+          Import-Module ActiveDirectory
+          try {
+              if ($ObjectType -eq 'computer') {
+                  # For computers, remove $ suffix if present
+                  $Identity = $Identity.TrimEnd('$')
+                  
+                  # Add SPNs if specified (skip empty strings from Ansible join)
+                  if ($SPNs -and $SPNs.Trim()) {
+                      $spnArray = @($SPNs -split ',' | Where-Object { $_.Trim() })
+                      if ($spnArray.Count -gt 0) {
+                          Set-ADComputer -Identity $Identity -Server $DomainName -ServicePrincipalNames @{Add=$spnArray}
+                      }
+                  }
+                  
+                  if ($AllowedToDelegateTo -and $AllowedToDelegateTo.Trim()) {
+                      [string[]]$delegateTo = @($AllowedToDelegateTo -split ',' | Where-Object { $_.Trim() })
+                      if ($delegateTo.Count -gt 0) {
+                          Set-ADComputer -Identity $Identity -Server $DomainName -Replace @{'msDS-AllowedToDelegateTo'=$delegateTo}
+                      }
+                  }
+                  
+                  # Note: Do NOT set TrustedToAuthForDelegation for Kerberos-only
+              } else {
+                  if ($SPNs -and $SPNs.Trim()) {
+                      $spnArray = @($SPNs -split ',' | Where-Object { $_.Trim() })
+                      if ($spnArray.Count -gt 0) {
+                          Set-ADUser -Identity $Identity -Server $DomainName -ServicePrincipalNames @{Add=$spnArray}
+                      }
+                  }
+                  
+                  if ($AllowedToDelegateTo -and $AllowedToDelegateTo.Trim()) {
+                      [string[]]$delegateTo = @($AllowedToDelegateTo -split ',' | Where-Object { $_.Trim() })
+                      if ($delegateTo.Count -gt 0) {
+                          Set-ADUser -Identity $Identity -Server $DomainName -Replace @{'msDS-AllowedToDelegateTo'=$delegateTo}
+                      }
+                  }
+              }
+              
+              Write-Output "SUCCESS: $Identity constrained delegation (kerb only) configured"
+          } catch {
+              Write-Error "FAILED: $Identity - $($_.Exception.Message)"
+          }
+        parameters:
+          Identity: "{{ item.name }}"
+          DomainName: "{{ item.domain }}"
+          ObjectType: "{{ item.type | default('user') }}"
+          SPNs: "{{ item.spns | default([]) | join(',') }}"
+          AllowedToDelegateTo: "{{ item.allowed_to_delegate | default([]) | join(',') }}"
+      loop: "{{ ludus_constrained_delegation_kerb_only }}"
+      loop_control:
+        label: "{{ item.name }}@{{ item.domain }}"
+      changed_when: "'SUCCESS' in _constrained_kerb_result.output | default('')"
+      register: _constrained_kerb_result
+
+# ============================================================================
+# ACCOUNT NOT DELEGATED (Sensitive)
+# ============================================================================
+
+- name: Configure accounts as sensitive (cannot be delegated)
+  when: ludus_account_not_delegated | length > 0
+  block:
+    - name: Set AccountNotDelegated flag
+      ansible.windows.win_powershell:
+        script: |
+          param($UserName, $DomainName)
+          Import-Module ActiveDirectory
+          try {
+              Set-ADAccountControl -Identity $UserName -Server $DomainName -AccountNotDelegated $true
+              Write-Output "SUCCESS: $UserName AccountNotDelegated enabled"
+          } catch {
+              Write-Error "FAILED: $UserName - $($_.Exception.Message)"
+          }
+        parameters:
+          UserName: "{{ item.name }}"
+          DomainName: "{{ item.domain }}"
+      loop: "{{ ludus_account_not_delegated }}"
+      loop_control:
+        label: "{{ item.name }}@{{ item.domain }}"
+      changed_when: "'SUCCESS' in _not_delegated_result.output | default('')"
+      register: _not_delegated_result
+
+# ============================================================================
+# SCHEDULED TASKS (Simulation Bots)
+# ============================================================================
+
+- name: Create scheduled tasks for simulation bots
+  when: ludus_scheduled_tasks | length > 0
+  block:
+    - name: Wait for AD replication before validating scheduled task users
+      ansible.windows.win_powershell:
+        script: |
+          # Force AD replication sync and wait for user accounts to be fully available
+          # This prevents LogonUser failures when creating scheduled tasks immediately
+          # after bulk AD content creation on the same DC
+          repadmin /syncall /AdeP 2>&1 | Out-Null
+          Start-Sleep -Seconds 10
+      changed_when: false
+
+    - name: Validate scheduled task user credentials before creation
+      ansible.windows.win_powershell:
+        script: |
+          param($Username, $Password)
+          # Retry up to 12 times (180 seconds total) waiting for LogonUser to succeed
+          # Scheduled tasks with domain users need AD replication to complete first.
+          # GOAD's weak passwords (e.g. "sexywolfy") can take extra time to propagate.
+          $maxRetries = 12
+          $retryDelay = 15
+          for ($i = 1; $i -le $maxRetries; $i++) {
+              Add-Type -TypeDefinition @"
+              using System;
+              using System.Runtime.InteropServices;
+              public class LogonValidator {
+                  [DllImport("advapi32.dll", SetLastError = true)]
+                  public static extern bool LogonUser(string lpszUsername, string lpszDomain, string lpszPassword, int dwLogonType, int dwLogonProvider, out IntPtr phToken);
+                  [DllImport("kernel32.dll")]
+                  public static extern bool CloseHandle(IntPtr hObject);
+              }
+          "@  -ErrorAction SilentlyContinue
+
+              # Parse DOMAIN\user format
+              $parts = $Username -split '\\'
+              if ($parts.Count -eq 2) {
+                  $domain = $parts[0]
+                  $user = $parts[1]
+              } else {
+                  $domain = $env:USERDOMAIN
+                  $user = $Username
+              }
+
+              $token = [IntPtr]::Zero
+              $result = [LogonValidator]::LogonUser($user, $domain, $Password, 2, 0, [ref]$token)
+              if ($result) {
+                  [LogonValidator]::CloseHandle($token) | Out-Null
+                  Write-Output "VALIDATED: $Username (attempt $i)"
+                  exit 0
+              }
+
+              if ($i -lt $maxRetries) {
+                  Write-Output "Retry $i/$maxRetries for $Username - waiting ${retryDelay}s..."
+                  Start-Sleep -Seconds $retryDelay
+              }
+          }
+          Write-Output "WARNING: Could not validate $Username after $maxRetries attempts - proceeding anyway"
+        parameters:
+          Username: "{{ item.user }}"
+          Password: "{{ item.password }}"
+      loop: "{{ ludus_scheduled_tasks | unique(attribute='user') }}"
+      loop_control:
+        label: "{{ item.user }}"
+      changed_when: false
+      ignore_errors: true
+
+    # Use native PowerShell Register-ScheduledTask instead of community.windows.win_scheduled_task
+    # The Ansible module's COM-based auth fails with cross-domain users (HRESULT: 0x8007052E)
+    # even when LogonUser() validates the same credentials successfully.
+    - name: Create scheduled task via PowerShell
+      ansible.windows.win_powershell:
+        script: |
+          param($TaskName, $Description, $Username, $Password, $Command, $Arguments, $RepeatInterval, $Enabled)
+          try {
+              # Remove existing task if present (idempotent)
+              $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+              if ($existing) {
+                  Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+              }
+
+              $action = New-ScheduledTaskAction -Execute $Command -Argument $Arguments
+              $trigger = New-ScheduledTaskTrigger -Once -At "2026-01-01T00:00:00" `
+                  -RepetitionInterval (New-TimeSpan -Minutes ([int]($RepeatInterval -replace 'PT(\d+)M','$1'))) `
+                  -RepetitionDuration (New-TimeSpan -Days 365)
+              $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+                  -StartWhenAvailable -RunOnlyIfNetworkAvailable:$false
+              $principal = New-ScheduledTaskPrincipal -UserId $Username -LogonType Password -RunLevel Highest
+
+              $task = New-ScheduledTask -Action $action -Trigger $trigger -Settings $settings `
+                  -Principal $principal -Description $Description
+
+              Register-ScheduledTask -TaskName $TaskName -InputObject $task `
+                  -User $Username -Password $Password -Force | Out-Null
+
+              if (-not $Enabled) {
+                  Disable-ScheduledTask -TaskName $TaskName | Out-Null
+              }
+
+              Write-Output "SUCCESS: Scheduled task '$TaskName' created for $Username"
+              $Ansible.Changed = $true
+          } catch {
+              Write-Error "FAILED: $TaskName - $($_.Exception.Message)"
+          }
+        parameters:
+          TaskName: "{{ item.name }}"
+          Description: "{{ item.description | default('Ludus simulation bot') }}"
+          Username: "{{ item.user }}"
+          Password: "{{ item.password }}"
+          Command: "{{ item.command }}"
+          Arguments: "{{ item.arguments | default('') }}"
+          RepeatInterval: "{{ item.repeat_interval | default('PT5M') }}"
+          Enabled: "{{ item.enabled | default(true) }}"
+      loop: "{{ ludus_scheduled_tasks }}"
+      loop_control:
+        label: "{{ item.name }}"
+      ignore_errors: true
+      register: _sched_task_result
+
+    - name: Log scheduled tasks created
+      ansible.builtin.debug:
+        msg: "Processed {{ ludus_scheduled_tasks | length }} scheduled task(s)"
+
+# ============================================================================
+# GPO ABUSE
+# ============================================================================
+
+- name: Configure GPO for abuse practice
+  when: ludus_gpo_abuse_enabled | bool and ludus_gpo_name | length > 0
+  block:
+    - name: Install GPMC feature
+      ansible.windows.win_feature:
+        name: GPMC
+        state: present
+
+    - name: Create and configure GPO for abuse
+      ansible.windows.win_powershell:
+        script: |
+          param($GpoName, $LinkTarget, $Editors)
+          Import-Module GroupPolicy
+          
+          try {
+              # Create GPO if it doesn't exist
+              $gpo = Get-GPO -Name $GpoName -ErrorAction SilentlyContinue
+              if (-not $gpo) {
+                  $gpo = New-GPO -Name $GpoName
+                  Write-Output "Created GPO: $GpoName"
+              } else {
+                  Write-Output "GPO exists: $GpoName"
+              }
+              
+              # Link GPO to target if specified
+              if ($LinkTarget) {
+                  try {
+                      $link = Get-GPLink -Name $GpoName -Target $LinkTarget -ErrorAction SilentlyContinue
+                      if (-not $link) {
+                          New-GPLink -Name $GpoName -Target $LinkTarget -LinkEnabled Yes
+                          Write-Output "Linked GPO to: $LinkTarget"
+                      }
+                  } catch {
+                      Write-Output "GPO link skipped or already exists"
+                  }
+              }
+              
+              # Grant permissions to editors
+              if ($Editors) {
+                  $editorList = $Editors | ConvertFrom-Json
+                  foreach ($editor in $editorList) {
+                      $permission = $editor.permission
+                      $name = $editor.name
+                      Set-GPPermissions -Name $GpoName -TargetName $name -TargetType User -PermissionLevel $permission
+                      Write-Output "Granted $permission to $name on $GpoName"
+                  }
+              }
+              
+              Write-Output "SUCCESS: GPO abuse configuration complete"
+          } catch {
+              Write-Error "FAILED: GPO configuration - $($_.Exception.Message)"
+          }
+        parameters:
+          GpoName: "{{ ludus_gpo_name }}"
+          LinkTarget: "{{ ludus_gpo_link_target }}"
+          Editors: "{{ ludus_gpo_editors | to_json }}"
+      changed_when: "'SUCCESS' in _gpo_result.output | default('')"
+      register: _gpo_result
+
+# ============================================================================
+# SMB SIGNING CONFIGURATION
+# ============================================================================
+
+- name: Disable SMB signing for relay attacks
+  when: ludus_smb_signing_disabled | default(false) | bool
+  block:
+    - name: Disable SMB signing requirement (server)
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters
+        name: RequireSecuritySignature
+        data: 0
+        type: dword
+        state: present
+
+    - name: Disable SMB signing requirement (client)
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters
+        name: RequireSecuritySignature
+        data: 0
+        type: dword
+        state: present
+
+    - name: Disable SMB signing (server EnableSecuritySignature)
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters
+        name: EnableSecuritySignature
+        data: 0
+        type: dword
+        state: present
+
+    - name: Log SMB signing disabled
+      ansible.builtin.debug:
+        msg: "SMB signing disabled - host is vulnerable to SMB relay attacks"
+
+# ============================================================================
+# PRINT SPOOLER SERVICE (Printerbug / Printnightmare)
+# ============================================================================
+
+- name: Enable Print Spooler service for coercion attacks
+  when: ludus_print_spooler_enabled | default(false) | bool
+  block:
+    - name: Ensure Print Spooler service is running
+      ansible.windows.win_service:
+        name: Spooler
+        start_mode: auto
+        state: started
+
+    - name: Log Print Spooler enabled
+      ansible.builtin.debug:
+        msg: "Print Spooler service enabled - host is vulnerable to Printerbug/Printnightmare"
+
+# ============================================================================
+# WEBCLIENT SERVICE (PetitPotam WebDAV Coercion)
+# ============================================================================
+
+- name: Enable WebClient service for coercion attacks
+  when: ludus_webclient_enabled | default(false) | bool
+  block:
+    - name: Install WebDAV-Redirector feature for WebClient service
+      ansible.windows.win_feature:
+        name: WebDAV-Redirector
+        state: present
+      register: _webclient_feature
+
+    - name: Reboot if WebDAV-Redirector feature requires it
+      ansible.windows.win_reboot:
+        reboot_timeout: 600
+        post_reboot_delay: 30
+      when: _webclient_feature.reboot_required | default(false)
+
+    # After any reboot on a domain-joined member server, the secure channel
+    # (machine account password trust) can break — especially if other roles
+    # (e.g., ludus_ad_laps) moved the computer object to a different OU.
+    # Test and repair the channel before proceeding with domain-dependent tasks.
+    - name: Verify and repair domain secure channel after reboot
+      ansible.windows.win_powershell:
+        script: |
+          if (-not (Test-ComputerSecureChannel -ErrorAction SilentlyContinue)) {
+              Write-Output "BROKEN: Secure channel is broken, attempting repair..."
+              try {
+                  Test-ComputerSecureChannel -Repair -ErrorAction Stop
+                  Write-Output "REPAIRED: Secure channel repaired successfully"
+                  $Ansible.Changed = $true
+              } catch {
+                  Write-Error "FAILED: Could not repair secure channel: $($_.Exception.Message)"
+              }
+          } else {
+              Write-Output "OK: Secure channel is healthy"
+          }
+      when: _webclient_feature.reboot_required | default(false)
+      register: _secure_channel_result
+
+    - name: Ensure WebClient service is running
+      ansible.windows.win_service:
+        name: WebClient
+        start_mode: auto
+        state: started
+
+    - name: Log WebClient enabled
+      ansible.builtin.debug:
+        msg: "WebClient service enabled - host is vulnerable to WebDAV coercion"
+
+# ============================================================================
+# LDAP SIGNING CONFIGURATION
+# ============================================================================
+
+- name: Disable LDAP signing for relay attacks
+  when: ludus_ldap_signing_disabled | default(false) | bool
+  block:
+    - name: Disable LDAP signing requirement
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Services\NTDS\Parameters
+        name: LDAPServerIntegrity
+        data: 1
+        type: dword
+        state: present
+
+    - name: Log LDAP signing disabled
+      ansible.builtin.debug:
+        msg: "LDAP signing disabled - host is vulnerable to LDAP relay attacks"
+
+# ============================================================================
+# MACHINE ACCOUNT QUOTA (KrbRelayUp)
+# ============================================================================
+
+- name: Configure Machine Account Quota
+  when: ludus_machine_account_quota_enabled | default(false) | bool
+  block:
+    - name: Set ms-DS-MachineAccountQuota
+      ansible.windows.win_powershell:
+        script: |
+          param($QuotaValue)
+          Import-Module ActiveDirectory
+          try {
+              $domain = Get-ADDomain
+              Set-ADDomain -Identity $domain -Replace @{'ms-DS-MachineAccountQuota'=$QuotaValue}
+              Write-Output "SUCCESS: ms-DS-MachineAccountQuota set to $QuotaValue"
+          } catch {
+              Write-Error "FAILED: $($_.Exception.Message)"
+          }
+        parameters:
+          QuotaValue: "{{ ludus_machine_account_quota_value | int }}"
+      changed_when: "'SUCCESS' in _quota_result.output | default('')"
+      register: _quota_result
+
+    - name: Log Machine Account Quota configured
+      ansible.builtin.debug:
+        msg: "ms-DS-MachineAccountQuota set to {{ ludus_machine_account_quota_value }}"
+
+# ============================================================================
+# SUMMARY
+# ============================================================================
+
+- name: Display misconfiguration summary
+  ansible.builtin.debug:
+    msg: |
+      ============================================
+      AD Misconfiguration Summary for {{ ansible_hostname }}
+      Mode: {{ ludus_misconfigs_mode | default('custom') }}
+      ============================================
+      NETWORK & SERVICES:
+        Firewall Disabled: {{ ludus_firewall_disabled | default(false) }}
+        SMB Signing Disabled: {{ ludus_smb_signing_disabled | default(false) }}
+        Print Spooler Enabled: {{ ludus_print_spooler_enabled | default(false) }}
+        WebClient Enabled: {{ ludus_webclient_enabled | default(false) }}
+      
+      NAME RESOLUTION POISONING:
+        LLMNR Enabled: {{ ludus_llmnr_enabled | default(false) }}
+        NBT-NS Enabled: {{ ludus_nbt_ns_enabled | default(false) }}
+      
+      AUTHENTICATION:
+        NTLM Downgrade: {{ ludus_ntlm_downgrade_enabled | default(false) }}
+        LSA PPL: {{ ludus_lsa_ppl_enabled | default(false) }}
+        Autologon: {{ ludus_autologon_enabled | default(false) }}
+        Credential Manager Entries: {{ ludus_credential_manager_entries | default([]) | length }}
+      
+      KERBEROS ATTACKS:
+        AS-REP Roast Users: {{ ludus_asrep_roast_users | default([]) | length }}
+        Unconstrained Delegation Users: {{ ludus_unconstrained_delegation_users | default([]) | length }}
+        Constrained Delegation (Any): {{ ludus_constrained_delegation_any | default([]) | length }}
+        Constrained Delegation (Kerb): {{ ludus_constrained_delegation_kerb_only | default([]) | length }}
+        Account Not Delegated: {{ ludus_account_not_delegated | default([]) | length }}
+      
+      AUTOMATION & GPO:
+        Scheduled Tasks: {{ ludus_scheduled_tasks | default([]) | length }}
+        GPO Abuse: {{ ludus_gpo_abuse_enabled | default(false) }}
+      ============================================

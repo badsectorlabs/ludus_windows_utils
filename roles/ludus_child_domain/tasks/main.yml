@@ -1,0 +1,67 @@
+---
+# ludus_child_domain — Create an AD child domain (idempotent)
+# Reference: https://docs.ansible.com/ansible/latest/collections/microsoft/ad/domain_child_module.html
+#
+# microsoft.ad.domain_child is idempotent - it detects if already a DC and skips
+
+# Step 1: Install AD Domain Services (idempotent - skips if installed)
+- name: Install AD Domain Services feature
+  ansible.windows.win_feature:
+    name:
+      - AD-Domain-Services
+      - RSAT-AD-Tools
+      - RSAT-AD-PowerShell
+    state: present
+    include_management_tools: true
+
+# Step 2: Configure DNS to include parent DC IP and this host's IP
+- name: Configure DNS to include parent DC and self
+  ansible.windows.win_dns_client:
+    adapter_names: "*"
+    ipv4_addresses:
+      - "{{ ludus_parent_dc_ip }}"
+      - "{{ ansible_host }}"
+
+# Step 3: Create the child domain (idempotent - skips if already DC)
+- name: Create child domain
+  microsoft.ad.domain_child:
+    dns_domain_name: "{{ ludus_child_domain_fqdn }}"
+    domain_admin_user: "{{ ludus_domain_admin_user | default(defaults.ad_domain_admin + '@' + ludus_parent_domain_fqdn) }}"
+    domain_admin_password: "{{ ludus_domain_admin_password | default(defaults.ad_domain_admin_password) }}"
+    safe_mode_password: "{{ ludus_safe_mode_password | default(defaults.ad_domain_safe_mode_password) }}"
+    create_dns_delegation: "{{ ludus_create_dns_delegation | default(true) }}"
+    install_dns: true
+    reboot: true
+  register: _child_domain_result
+
+# Step 4: Wait for AD Web Services to be ready after promotion
+- name: Wait for Active Directory Web Services to start
+  ansible.windows.win_service:
+    name: ADWS
+    state: started
+  register: _adws_status
+  until: _adws_status is success
+  retries: 30
+  delay: 30
+  when: _child_domain_result.changed
+
+# Step 5: Wait for Netlogon service (required for domain joins from member servers)
+- name: Wait for Netlogon service to be ready
+  ansible.windows.win_service:
+    name: Netlogon
+    state: started
+  register: _netlogon_status
+  until: _netlogon_status is success
+  retries: 30
+  delay: 30
+  when: _child_domain_result.changed
+
+# Step 6: Verify DNS is resolving the child domain before returning
+- name: Wait for DNS to resolve child domain
+  ansible.windows.win_shell: |
+    Resolve-DnsName "{{ ludus_child_domain_fqdn }}" -ErrorAction Stop
+  register: _dns_result
+  until: _dns_result.rc == 0
+  retries: 20
+  delay: 30
+  when: _child_domain_result.changed

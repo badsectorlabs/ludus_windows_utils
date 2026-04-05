@@ -1,0 +1,544 @@
+---
+# ludus_bulk_ad_content - Bulk Active Directory content creation
+# Modes: goad (default), custom, random
+#
+# This role runs AFTER Ludus core roles. The following variables are
+# automatically provided by Ludus and do NOT need to be set:
+#
+#   ludus_domain_fqdn          - e.g., "sevenkingdoms.local"
+#   ludus_domain_netbios_name  - e.g., "SEVENKINGDOMS"
+#   ludus_domain_fqdn_tail     - e.g., "local"
+#   ludus_dc_vm_name           - Primary DC VM name
+#   ludus_dc_ip                - Primary DC IP address
+#   ludus_dc_hostname          - Primary DC hostname
+#   defaults.ad_domain_admin   - Domain admin username
+#   defaults.ad_domain_admin_password - Domain admin password
+#
+# For standalone testing (outside Ludus), set these fallback variables:
+
+# =============================================================================
+# MODE SELECTION
+# =============================================================================
+# Options: "goad" | "custom" | "random"
+ludus_ad_content_mode: "goad"
+
+# =============================================================================
+# FALLBACK DOMAIN CONFIGURATION (only used if Ludus vars not available)
+# =============================================================================
+ludus_domain_name: ""           # Fallback: set if ludus_domain_fqdn not available
+ludus_domain_netbios: ""        # Fallback: set if ludus_domain_netbios_name not available
+ludus_domain_admin: "administrator"
+ludus_domain_admin_password: "password"
+
+# =============================================================================
+# RANDOM MODE CONFIGURATION
+# Used when ludus_ad_content_mode is "random"
+# =============================================================================
+ludus_random_config:
+  user_count: 30
+  ou_count: 5
+  group_count: 8
+  password_style: "weak"          # Options: "weak" | "realistic" | "strong"
+  department_names:
+    - "HR"
+    - "IT"
+    - "Sales"
+    - "Finance"
+    - "Marketing"
+    - "Engineering"
+    - "Operations"
+    - "Legal"
+  create_service_accounts: true
+  service_account_count: 2
+  seed: null                       # Set for reproducible generation
+
+# =============================================================================
+# CUSTOM MODE DATA
+# Used when ludus_ad_content_mode is "custom"
+# Override these in role_vars to provide your own AD content
+# =============================================================================
+ludus_organisation_units: []
+ludus_groups:
+  global: []
+  domainlocal: []
+  universal: []
+ludus_users: []
+ludus_multi_domain_group_members: []
+
+# =============================================================================
+# GOAD MODE - EMBEDDED DATASET
+# Used when ludus_ad_content_mode is "goad" (default)
+# Full GOAD (Game of Active Directory) data keyed by domain FQDN
+# =============================================================================
+ludus_goad_data:
+
+  # ===========================================================================
+  # SEVENKINGDOMS.LOCAL - Primary Forest Root Domain
+  # ===========================================================================
+  sevenkingdoms.local:
+    organisation_units:
+      - name: Vale
+        path: "DC=sevenkingdoms,DC=local"
+      - name: IronIslands
+        path: "DC=sevenkingdoms,DC=local"
+      - name: Riverlands
+        path: "DC=sevenkingdoms,DC=local"
+      - name: Crownlands
+        path: "DC=sevenkingdoms,DC=local"
+      - name: Stormlands
+        path: "DC=sevenkingdoms,DC=local"
+      - name: Westerlands
+        path: "DC=sevenkingdoms,DC=local"
+      - name: Reach
+        path: "DC=sevenkingdoms,DC=local"
+      - name: Dorne
+        path: "DC=sevenkingdoms,DC=local"
+
+    groups:
+      global:
+        - name: Lannister
+          path: "OU=Westerlands,DC=sevenkingdoms,DC=local"
+          managed_by: "tywin.lannister"
+        - name: Baratheon
+          path: "OU=Stormlands,DC=sevenkingdoms,DC=local"
+          managed_by: "robert.baratheon"
+        - name: "Small Council"
+          path: "OU=Crownlands,DC=sevenkingdoms,DC=local"
+        - name: DragonStone
+          path: "OU=Crownlands,DC=sevenkingdoms,DC=local"
+        - name: KingsGuard
+          path: "OU=Crownlands,DC=sevenkingdoms,DC=local"
+      domainlocal:
+        - name: AcrossTheNarrowSea
+          path: "CN=Users,DC=sevenkingdoms,DC=local"
+      universal:
+        - name: DragonRider
+          path: "OU=Crownlands,DC=sevenkingdoms,DC=local"
+
+    multi_domain_group_members:
+      - group: "AcrossTheNarrowSea"
+        members:
+          - "essos.local\\daenerys.targaryen"
+
+    users:
+      - name: tywin.lannister
+        firstname: Tywin
+        surname: Lannister
+        password: "powerkingftw135"
+        description: "Tywin Lannister"
+        city: "Casterly Rock"
+        path: "OU=Crownlands,DC=sevenkingdoms,DC=local"
+        groups:
+          - Lannister
+        password_never_expires: true
+
+      - name: jaime.lannister
+        firstname: Jaime
+        surname: Lannister
+        password: "cersei"
+        description: "Jaime Lannister"
+        city: "King's Landing"
+        path: "OU=Crownlands,DC=sevenkingdoms,DC=local"
+        groups:
+          - Lannister
+        password_never_expires: true
+
+      - name: cersei.lannister
+        firstname: Cersei
+        surname: Lannister
+        password: "il0vejaime"
+        description: "Cersei Lannister"
+        city: "King's Landing"
+        path: "OU=Crownlands,DC=sevenkingdoms,DC=local"
+        groups:
+          - Lannister
+          - Baratheon
+          - Domain Admins
+          - "Small Council"
+        password_never_expires: true
+
+      - name: tyron.lannister
+        firstname: Tyron
+        surname: Lannister
+        password: "Alc00L&S3x"
+        description: "Tyron Lannister"
+        city: "King's Landing"
+        path: "OU=Westerlands,DC=sevenkingdoms,DC=local"
+        groups:
+          - Lannister
+        password_never_expires: true
+
+      - name: robert.baratheon
+        firstname: Robert
+        surname: Baratheon
+        password: "iamthekingoftheworld"
+        description: "Robert Baratheon"
+        city: "King's Landing"
+        path: "OU=Crownlands,DC=sevenkingdoms,DC=local"
+        groups:
+          - Baratheon
+          - Domain Admins
+          - "Small Council"
+          - "Protected Users"
+        password_never_expires: true
+
+      - name: joffrey.baratheon
+        firstname: Joffrey
+        surname: Baratheon
+        password: "1killerlion"
+        description: "Joffrey Baratheon"
+        city: "King's Landing"
+        path: "OU=Crownlands,DC=sevenkingdoms,DC=local"
+        groups:
+          - Baratheon
+          - Lannister
+        password_never_expires: true
+
+      - name: renly.baratheon
+        firstname: Renly
+        surname: Baratheon
+        password: "lorastyrell"
+        description: "Renly Baratheon"
+        city: "King's Landing"
+        path: "OU=Crownlands,DC=sevenkingdoms,DC=local"
+        groups:
+          - Baratheon
+          - "Small Council"
+        password_never_expires: true
+
+      - name: stannis.baratheon
+        firstname: Stannis
+        surname: Baratheon
+        password: "Drag0nst0ne"
+        description: "Stannis Baratheon"
+        city: "King's Landing"
+        path: "OU=Crownlands,DC=sevenkingdoms,DC=local"
+        groups:
+          - Baratheon
+          - "Small Council"
+        password_never_expires: true
+
+      - name: petyer.baelish
+        firstname: Petyer
+        surname: Baelish
+        password: "@littlefinger@"
+        description: "Petyer Baelish"
+        city: "King's Landing"
+        path: "OU=Crownlands,DC=sevenkingdoms,DC=local"
+        groups:
+          - "Small Council"
+        password_never_expires: true
+
+      - name: lord.varys
+        firstname: Lord
+        surname: Varys
+        password: "_W1sper_$"
+        description: "Lord Varys"
+        city: "King's Landing"
+        path: "OU=Crownlands,DC=sevenkingdoms,DC=local"
+        groups:
+          - "Small Council"
+        password_never_expires: true
+
+      - name: maester.pycelle
+        firstname: Maester
+        surname: Pycelle
+        password: "MaesterOfMaesters"
+        description: "Maester Pycelle"
+        city: "King's Landing"
+        path: "OU=Crownlands,DC=sevenkingdoms,DC=local"
+        groups:
+          - "Small Council"
+        password_never_expires: true
+
+  # ===========================================================================
+  # NORTH.SEVENKINGDOMS.LOCAL - Child Domain
+  # ===========================================================================
+  north.sevenkingdoms.local:
+    organisation_units: []
+
+    groups:
+      global:
+        - name: Stark
+          path: "CN=Users,DC=north,DC=sevenkingdoms,DC=local"
+          managed_by: "eddard.stark"
+        - name: "Night Watch"
+          path: "CN=Users,DC=north,DC=sevenkingdoms,DC=local"
+          managed_by: "jeor.mormont"
+        - name: Mormont
+          path: "CN=Users,DC=north,DC=sevenkingdoms,DC=local"
+          managed_by: "jeor.mormont"
+      domainlocal:
+        - name: AcrossTheSea
+          path: "CN=Users,DC=north,DC=sevenkingdoms,DC=local"
+      universal: []
+
+    multi_domain_group_members: []
+
+    users:
+      - name: arya.stark
+        firstname: Arya
+        surname: Stark
+        password: "Needle"
+        description: "Arya Stark"
+        city: Winterfell
+        path: "CN=Users,DC=north,DC=sevenkingdoms,DC=local"
+        groups:
+          - Stark
+        password_never_expires: true
+
+      - name: eddard.stark
+        firstname: Eddard
+        surname: Stark
+        password: "FightP3aceAndHonor!"
+        description: "Eddard Stark"
+        city: "King's Landing"
+        path: "CN=Users,DC=north,DC=sevenkingdoms,DC=local"
+        groups:
+          - Stark
+          - Domain Admins
+        password_never_expires: true
+
+      - name: catelyn.stark
+        firstname: Catelyn
+        surname: Stark
+        password: "robbsansabradonaryarickon"
+        description: "Catelyn Stark"
+        city: "King's Landing"
+        path: "CN=Users,DC=north,DC=sevenkingdoms,DC=local"
+        groups:
+          - Stark
+        password_never_expires: true
+
+      - name: robb.stark
+        firstname: Robb
+        surname: Stark
+        password: "sexywolfy"
+        description: "Robb Stark"
+        city: Winterfell
+        path: "CN=Users,DC=north,DC=sevenkingdoms,DC=local"
+        groups:
+          - Stark
+        password_never_expires: true
+
+      - name: sansa.stark
+        firstname: Sansa
+        surname: Stark
+        password: "345ertdfg"
+        description: "Sansa Stark"
+        city: Winterfell
+        path: "CN=Users,DC=north,DC=sevenkingdoms,DC=local"
+        groups:
+          - Stark
+        spns:
+          - "HTTP/eyrie.north.sevenkingdoms.local"
+        password_never_expires: true
+
+      - name: brandon.stark
+        firstname: Brandon
+        surname: Stark
+        password: "iseedeadpeople"
+        description: "Brandon Stark"
+        city: Winterfell
+        path: "CN=Users,DC=north,DC=sevenkingdoms,DC=local"
+        groups:
+          - Stark
+        password_never_expires: true
+
+      - name: rickon.stark
+        firstname: Rickon
+        surname: Stark
+        password: "Winter2022"
+        description: "Rickon Stark"
+        city: Winterfell
+        path: "CN=Users,DC=north,DC=sevenkingdoms,DC=local"
+        groups:
+          - Stark
+        password_never_expires: true
+
+      - name: hodor
+        firstname: hodor
+        surname: hodor
+        password: "hodor"
+        description: "Brainless Giant"
+        city: Winterfell
+        path: "CN=Users,DC=north,DC=sevenkingdoms,DC=local"
+        groups:
+          - Stark
+        password_never_expires: true
+
+      - name: jon.snow
+        firstname: Jon
+        surname: Snow
+        password: "iknownothing"
+        description: "Jon Snow"
+        city: "Castel Black"
+        path: "CN=Users,DC=north,DC=sevenkingdoms,DC=local"
+        groups:
+          - Stark
+          - "Night Watch"
+        spns:
+          - "HTTP/thewall.north.sevenkingdoms.local"
+        password_never_expires: true
+
+      - name: samwell.tarly
+        firstname: Samwell
+        surname: Tarly
+        password: "Heartsbane"
+        description: "Samwell Tarly (Password : Heartsbane)"
+        city: "Castel Black"
+        path: "CN=Users,DC=north,DC=sevenkingdoms,DC=local"
+        groups:
+          - "Night Watch"
+        password_never_expires: true
+
+      - name: jeor.mormont
+        firstname: Jeor
+        surname: Mormont
+        password: "_L0ngCl@w_"
+        description: "Jeor Mormont"
+        city: "Castel Black"
+        path: "CN=Users,DC=north,DC=sevenkingdoms,DC=local"
+        groups:
+          - "Night Watch"
+          - Mormont
+        password_never_expires: true
+
+      - name: sql_svc
+        firstname: sql
+        surname: service
+        password: "YouWillNotKerboroast1ngMeeeeee"
+        description: "sql service"
+        city: ""
+        path: "CN=Users,DC=north,DC=sevenkingdoms,DC=local"
+        groups: []
+        spns:
+          - "MSSQLSvc/castelblack.north.sevenkingdoms.local:1433"
+          - "MSSQLSvc/castelblack.north.sevenkingdoms.local"
+        password_never_expires: true
+
+  # ===========================================================================
+  # ESSOS.LOCAL - Separate Forest (Trusted)
+  # ===========================================================================
+  essos.local:
+    organisation_units: []
+
+    groups:
+      global:
+        - name: Targaryen
+          path: "CN=Users,DC=essos,DC=local"
+          managed_by: "viserys.targaryen"
+        - name: Dothraki
+          path: "CN=Users,DC=essos,DC=local"
+          managed_by: "khal.drogo"
+        - name: Dragons
+          path: "CN=Users,DC=essos,DC=local"
+          managed_by: "Administrator"
+        - name: QueenProtector
+          path: "CN=Users,DC=essos,DC=local"
+          managed_by: "Administrator"
+          members:
+            - "ESSOS\\Dragons"
+        - name: Domain Admins
+          path: "CN=Users,DC=essos,DC=local"
+          managed_by: "Administrator"
+          members:
+            - "ESSOS\\QueenProtector"
+      domainlocal:
+        - name: DragonsFriends
+          path: "CN=Users,DC=essos,DC=local"
+          managed_by: "daenerys.targaryen"
+        - name: Spys
+          path: "CN=Users,DC=essos,DC=local"
+      universal:
+        - name: greatmaster
+          path: "CN=Users,DC=essos,DC=local"
+
+    multi_domain_group_members:
+      - group: "DragonsFriends"
+        members:
+          - "sevenkingdoms.local\\tyron.lannister"
+          - "essos.local\\daenerys.targaryen"
+      - group: "Spys"
+        members:
+          - "sevenkingdoms.local\\Small Council"
+
+    users:
+      - name: daenerys.targaryen
+        firstname: daenerys
+        surname: targaryen
+        password: "BurnThemAll!"
+        description: "Daenerys Targaryen"
+        city: ""
+        path: "CN=Users,DC=essos,DC=local"
+        groups:
+          - Targaryen
+          - Domain Admins
+        password_never_expires: true
+
+      - name: viserys.targaryen
+        firstname: viserys
+        surname: targaryen
+        password: "GoldCrown"
+        description: "Viserys Targaryen"
+        city: ""
+        path: "CN=Users,DC=essos,DC=local"
+        groups:
+          - Targaryen
+        password_never_expires: true
+
+      - name: khal.drogo
+        firstname: khal
+        surname: drogo
+        password: "horse"
+        description: "Khal Drogo"
+        city: ""
+        path: "CN=Users,DC=essos,DC=local"
+        groups:
+          - Dothraki
+        password_never_expires: true
+
+      - name: jorah.mormont
+        firstname: jorah
+        surname: mormont
+        password: "H0nnor!"
+        description: "Jorah Mormont"
+        city: ""
+        path: "CN=Users,DC=essos,DC=local"
+        groups:
+          - Targaryen
+        password_never_expires: true
+
+      - name: missandei
+        firstname: missandei
+        surname: ""
+        password: "fr3edom"
+        description: "missandei"
+        city: ""
+        path: "CN=Users,DC=essos,DC=local"
+        groups: []
+        password_never_expires: true
+
+      - name: drogon
+        firstname: drogon
+        surname: ""
+        password: "Dracarys"
+        description: "drogon"
+        city: ""
+        path: "CN=Users,DC=essos,DC=local"
+        groups:
+          - Dragons
+        password_never_expires: true
+
+      - name: sql_svc
+        firstname: sql
+        surname: service
+        password: "YouWillNotKerboroast1ngMeeeeee"
+        description: "sql service"
+        city: ""
+        path: "CN=Users,DC=essos,DC=local"
+        groups: []
+        spns:
+          - "MSSQLSvc/braavos.essos.local:1433"
+          - "MSSQLSvc/braavos.essos.local"
+        password_never_expires: true

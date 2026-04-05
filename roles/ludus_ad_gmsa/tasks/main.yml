@@ -1,0 +1,141 @@
+---
+# ludus_ad_gmsa — Creates Group Managed Service Accounts (gMSA)
+#
+# Based on GOAD's gmsa role:
+# https://github.com/Orange-Cyberdefense/GOAD/tree/main/ansible/roles/gmsa
+#
+# Uses New-ADServiceAccount (single PowerShell call) instead of DSC resources.
+# GOAD proved this is the simplest and most reliable approach — sets name,
+# DNSHostName, SPNs, and permitted hosts all at once.
+
+- name: Validate gMSA accounts list is set
+  ansible.builtin.assert:
+    that:
+      - ludus_gmsa_accounts is defined
+      - ludus_gmsa_accounts | length > 0
+    fail_msg: "ludus_gmsa_accounts must be defined with at least one entry."
+
+# ============================================================
+# KDS Root Key — Required for gMSA password generation
+# Backdated 10 hours to allow immediate use (matches GOAD)
+# Idempotent: checks if key already exists before creating
+# ============================================================
+
+- name: Create KDS Root Key (backdated 10 hours for immediate use)
+  ansible.windows.win_powershell:
+    script: |
+      Import-Module ActiveDirectory
+      # Check if KDS root key already exists
+      $existingKey = Get-KdsRootKey -ErrorAction SilentlyContinue
+      if ($existingKey) {
+        $Ansible.Changed = $false
+      } else {
+        Add-KdsRootKey -EffectiveTime (Get-Date).AddHours(-10) | Out-Null
+        $Ansible.Changed = $true
+      }
+  vars:
+    ansible_become: true
+    ansible_become_method: runas
+    ansible_become_user: "{{ ludus_domain_fqdn }}\\{{ ludus_gmsa_domain_admin }}"
+    ansible_become_password: "{{ ludus_gmsa_domain_admin_password }}"
+    ansible_become_flags: "logon_type=interactive logon_flags=with_profile"
+
+# ============================================================
+# gMSA Account Creation — Single PowerShell call per account
+# Matches GOAD approach: New-ADServiceAccount with all params
+# Sets name, DNSHostName, SPNs, and permitted principals at once
+# ============================================================
+
+- name: Create gMSA accounts
+  ansible.windows.win_powershell:
+    script: |
+      [CmdletBinding()]
+      param (
+        [String]$gMSA_Name,
+        [String]$gMSA_FQDN,
+        [String[]]$gMSA_SPNs,
+        [String[]]$gMSA_HostNames
+      )
+
+      Import-Module ActiveDirectory
+
+      # Check if gMSA already exists
+      $existing = Get-ADServiceAccount -Filter "Name -eq '$gMSA_Name'" -ErrorAction SilentlyContinue
+      if ($existing) {
+        # gMSA exists — update SPNs and permitted principals if needed
+        $currentSPNs = @($existing.ServicePrincipalNames)
+        $newSPNs = @($gMSA_SPNs | Where-Object { $_ -notin $currentSPNs })
+
+        if ($newSPNs.Count -gt 0) {
+          Set-ADServiceAccount -Identity $gMSA_Name -ServicePrincipalNames @{Add=$newSPNs}
+        }
+
+        # Update permitted principals
+        $hostsGroup = $gMSA_HostNames | ForEach-Object { Get-ADComputer -Identity $_ }
+        Set-ADServiceAccount -Identity $gMSA_Name -PrincipalsAllowedToRetrieveManagedPassword $hostsGroup
+
+        # Update DNSHostName if different
+        $account = Get-ADServiceAccount -Identity $gMSA_Name -Properties DNSHostName
+        if ($account.DNSHostName -ne $gMSA_FQDN) {
+          Set-ADServiceAccount -Identity $gMSA_Name -DNSHostName $gMSA_FQDN
+        }
+
+        $Ansible.Changed = ($newSPNs.Count -gt 0)
+      } else {
+        # Create new gMSA — single call with all parameters (matches GOAD)
+        $hostsGroup = $gMSA_HostNames | ForEach-Object { Get-ADComputer -Identity $_ }
+        New-ADServiceAccount -Name $gMSA_Name `
+          -DNSHostName $gMSA_FQDN `
+          -PrincipalsAllowedToRetrieveManagedPassword $hostsGroup `
+          -ServicePrincipalNames $gMSA_SPNs
+        $Ansible.Changed = $true
+      }
+    parameters:
+      gMSA_Name: "{{ item.name }}"
+      gMSA_FQDN: "{{ item.dns_hostname }}"
+      gMSA_SPNs: "{{ item.spns }}"
+      gMSA_HostNames: "{{ item.permitted_hosts }}"
+  loop: "{{ ludus_gmsa_accounts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    ansible_become: true
+    ansible_become_method: runas
+    ansible_become_user: "{{ ludus_domain_fqdn }}\\{{ ludus_gmsa_domain_admin }}"
+    ansible_become_password: "{{ ludus_gmsa_domain_admin_password }}"
+    ansible_become_flags: "logon_type=interactive logon_flags=with_profile"
+
+# ============================================================
+# Verification — Show created gMSA accounts
+# ============================================================
+
+- name: Verify gMSA accounts were created
+  ansible.windows.win_powershell:
+    script: |
+      Import-Module ActiveDirectory
+      $names = @({{ ludus_gmsa_accounts | map(attribute='name') | map('regex_replace', '^(.*)$', "'\\1'") | join(', ') }})
+      foreach ($name in $names) {
+        $account = Get-ADServiceAccount -Filter "Name -eq '$name'" -Properties DNSHostName, ServicePrincipalNames, PrincipalsAllowedToRetrieveManagedPassword -ErrorAction SilentlyContinue
+        if ($account) {
+          Write-Output "gMSA: $($account.Name)"
+          Write-Output "  DNSHostName: $($account.DNSHostName)"
+          Write-Output "  Enabled: $($account.Enabled)"
+          Write-Output "  SPNs: $($account.ServicePrincipalNames -join ', ')"
+          Write-Output "  Permitted: $($account.PrincipalsAllowedToRetrieveManagedPassword -join ', ')"
+          Write-Output ""
+        } else {
+          Write-Output "WARNING: gMSA '$name' NOT FOUND"
+        }
+      }
+      $Ansible.Changed = $false
+  register: gmsa_verification
+  vars:
+    ansible_become: true
+    ansible_become_method: runas
+    ansible_become_user: "{{ ludus_domain_fqdn }}\\{{ ludus_gmsa_domain_admin }}"
+    ansible_become_password: "{{ ludus_gmsa_domain_admin_password }}"
+    ansible_become_flags: "logon_type=interactive logon_flags=with_profile"
+
+- name: Display gMSA account status
+  ansible.builtin.debug:
+    msg: "{{ gmsa_verification.output | default(['No gMSA accounts found']) }}"

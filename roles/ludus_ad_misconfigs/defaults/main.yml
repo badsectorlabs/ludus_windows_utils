@@ -1,0 +1,449 @@
+---
+# ludus_ad_misconfigs - Windows/AD Misconfigurations for Attack Labs
+# This role configures various security misconfigurations commonly found in AD environments
+# Enable only the misconfigurations you need for your lab scenario
+
+# ============================================================================
+# GLOBAL SETTINGS
+# ============================================================================
+
+# Operating mode - "custom" allows granular control, "goad" applies GOAD defaults
+ludus_misconfigs_mode: "custom"
+
+# Hostname override for GOAD mode lookup (default: auto-detected from ansible_hostname)
+# Set this if the ansible_hostname doesn't match the GOAD config keys
+ludus_misconfigs_hostname_override: ""
+
+# Domain information (auto-detected from Ludus when possible)
+ludus_misconfigs_domain: "{{ (ludus | selectattr('vm_name', 'match', inventory_hostname))[0].domain.fqdn | default('') }}"
+ludus_misconfigs_domain_netbios: "{{ ludus_misconfigs_domain.split('.')[0] | upper }}"
+
+# ============================================================================
+# FIREWALL SETTINGS
+# ============================================================================
+
+# Disable Windows Firewall for all profiles
+ludus_firewall_disabled: false
+ludus_firewall_profiles:
+  - Domain
+  - Private
+  - Public
+
+# ============================================================================
+# NAME RESOLUTION POISONING (LLMNR / NBT-NS)
+# ============================================================================
+
+# Enable LLMNR (Link-Local Multicast Name Resolution) - allows Responder attacks
+# Registry: HKLM\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient\EnableMulticast = 1
+ludus_llmnr_enabled: false
+
+# Enable NetBIOS Name Service (NBT-NS) - allows Responder attacks
+# Sets NodeType to hybrid (0x8) or broadcast (0x1) to enable NBT-NS
+ludus_nbt_ns_enabled: false
+ludus_nbt_ns_node_type: "0x00000008"  # 0x8 = hybrid (p-node fallback to b-node)
+
+# ============================================================================
+# NTLM AUTHENTICATION SETTINGS
+# ============================================================================
+
+# NTLM downgrade - Set LmCompatibilityLevel to allow NTLMv1
+# 0 = Send LM & NTLM responses
+# 1 = Send LM & NTLM - use NTLMv2 session security if negotiated
+# 2 = Send NTLM response only (GOAD default for dc03)
+# 3 = Send NTLMv2 response only
+# 4 = Send NTLMv2 response only, refuse LM
+# 5 = Send NTLMv2 response only, refuse LM & NTLM
+ludus_ntlm_downgrade_enabled: false
+ludus_ntlm_lm_compatibility_level: 2
+
+# ============================================================================
+# SMB SIGNING (Relay Attacks)
+# ============================================================================
+
+# Disable SMB signing to allow relay attacks
+# WARNING: Makes host vulnerable to SMB relay
+ludus_smb_signing_disabled: false
+
+# ============================================================================
+# PRINT SPOOLER (Printerbug / Printnightmare)
+# ============================================================================
+
+# Ensure Print Spooler service is running (for Printerbug coercion)
+ludus_print_spooler_enabled: false
+
+# ============================================================================
+# WEBDAV CLIENT (Coercion Attacks)
+# ============================================================================
+
+# Enable WebClient service (for PetitPotam WebDAV coercion)
+ludus_webclient_enabled: false
+
+# ============================================================================
+# LSA PROTECTION (PPL / Credential Guard)
+# ============================================================================
+
+# Enable LSA Protection (RunAsPPL) - makes credential extraction harder
+# Useful for practicing bypass techniques
+ludus_lsa_ppl_enabled: false
+
+# ============================================================================
+# AUTOLOGON SETTINGS
+# ============================================================================
+
+# Configure automatic login for a user
+# Useful for simulating logged-in users for credential harvesting
+ludus_autologon_enabled: false
+ludus_autologon_user: ""
+ludus_autologon_password: ""
+ludus_autologon_domain: ""
+
+# ============================================================================
+# CREDENTIAL MANAGER
+# ============================================================================
+
+# Store credentials in Windows Credential Manager
+# Useful for practicing credential extraction from cmdkey/Credential Manager
+ludus_credential_manager_entries: []
+# Example:
+# ludus_credential_manager_entries:
+#   - target: "TERMSRV/server.domain.local"
+#     username: "DOMAIN\\user"
+#     password: "password123"
+
+# ============================================================================
+# KERBEROS - AS-REP ROASTING
+# ============================================================================
+
+# Users with "Do not require Kerberos preauthentication" flag
+# These accounts can be AS-REP roasted
+ludus_asrep_roast_users: []
+# Example:
+# ludus_asrep_roast_users:
+#   - name: "brandon.stark"
+#     domain: "north.sevenkingdoms.local"
+
+# ============================================================================
+# KERBEROS - DELEGATION SETTINGS
+# ============================================================================
+
+# Unconstrained Delegation - Users/Computers trusted for delegation
+# WARNING: Very dangerous - can lead to full domain compromise
+ludus_unconstrained_delegation_users: []
+# Example:
+# ludus_unconstrained_delegation_users:
+#   - name: "sansa.stark"
+#     domain: "north.sevenkingdoms.local"
+
+ludus_unconstrained_delegation_computers: []
+# Example:
+# ludus_unconstrained_delegation_computers:
+#   - name: "WEBSERVER$"
+#     domain: "domain.local"
+
+# Constrained Delegation with Protocol Transition (Any Authentication)
+# msDS-AllowedToDelegateTo + TrustedToAuthForDelegation flag
+ludus_constrained_delegation_any: []
+# Example:
+# ludus_constrained_delegation_any:
+#   - name: "jon.snow"
+#     domain: "north.sevenkingdoms.local"
+#     spns:
+#       - "CIFS/winterfell.north.sevenkingdoms.local"
+#     allowed_to_delegate:
+#       - "CIFS/winterfell.north.sevenkingdoms.local"
+#       - "CIFS/winterfell"
+
+# Constrained Delegation Kerberos Only (No Protocol Transition)
+# msDS-AllowedToDelegateTo WITHOUT TrustedToAuthForDelegation flag
+ludus_constrained_delegation_kerb_only: []
+# Example:
+# ludus_constrained_delegation_kerb_only:
+#   - name: "CASTELBLACK$"
+#     domain: "north.sevenkingdoms.local"
+#     type: "computer"  # "user" or "computer"
+#     spns:
+#       - "HTTP/winterfell.north.sevenkingdoms.local"
+#     allowed_to_delegate:
+#       - "HTTP/winterfell.north.sevenkingdoms.local"
+#       - "HTTP/winterfell"
+
+# ============================================================================
+# ACCOUNT PROTECTION SETTINGS
+# ============================================================================
+
+# Accounts marked as "sensitive and cannot be delegated"
+# These accounts have AccountNotDelegated flag set
+ludus_account_not_delegated: []
+# Example:
+# ludus_account_not_delegated:
+#   - name: "renly.baratheon"
+#     domain: "sevenkingdoms.local"
+
+# ============================================================================
+# SCHEDULED TASKS (SIMULATION BOTS)
+# ============================================================================
+
+# Create scheduled tasks that simulate user activity
+# Useful for practicing NTLM relay, Responder, credential harvesting
+ludus_scheduled_tasks: []
+# Example:
+# ludus_scheduled_tasks:
+#   - name: "ntlm_relay_bot"
+#     description: "Simulates NTLM authentication to share"
+#     user: "DOMAIN\\user"
+#     password: "password123"
+#     command: "cmd.exe"
+#     arguments: '/c powershell New-PSDrive -Name "X" -PSProvider FileSystem -Root "\\\\server\\share"'
+#     trigger: "repetition"
+#     repeat_interval: "PT5M"  # Every 5 minutes
+#     enabled: true
+
+# ============================================================================
+# GPO ABUSE
+# ============================================================================
+
+# Create a GPO and grant write permissions to a user (for GPO abuse practice)
+ludus_gpo_abuse_enabled: false
+ludus_gpo_name: ""
+ludus_gpo_link_target: ""  # e.g., "DC=north,DC=sevenkingdoms,DC=local"
+ludus_gpo_editors: []
+# Example:
+# ludus_gpo_editors:
+#   - name: "samwell.tarly"
+#     permission: "GpoEditDeleteModifySecurity"
+
+# ============================================================================
+# MACHINE ACCOUNT QUOTA (MachineAccountQuota)
+# ============================================================================
+
+# Set ms-DS-MachineAccountQuota (default is 10, set to 0 to disable or higher for attacks)
+# Used for KrbRelayUp and other machine account attacks
+ludus_machine_account_quota_enabled: false
+ludus_machine_account_quota_value: 10
+
+# ============================================================================
+# LDAP SIGNING (Relay Attacks)
+# ============================================================================
+
+# Set LDAP signing to "not required" for relay attacks
+# Registry: HKLM\System\CurrentControlSet\Services\NTDS\Parameters\LDAPServerIntegrity = 1 (none)
+ludus_ldap_signing_disabled: false
+
+# ============================================================================
+# LOCAL GROUP MEMBERSHIPS
+# ============================================================================
+
+# Add domain users/groups to local groups (Administrators, Remote Desktop Users, etc.)
+# Critical for lateral movement paths in attack labs
+ludus_local_groups: []
+# Example:
+# ludus_local_groups:
+#   - group: "Administrators"
+#     members:
+#       - "DOMAIN\\user1"
+#       - "DOMAIN\\SecurityGroup"
+#   - group: "Remote Desktop Users"
+#     members:
+#       - "DOMAIN\\GroupName"
+
+# ============================================================================
+# GOAD MODE - Predefined configurations for Game of Active Directory v2
+# ============================================================================
+
+# When ludus_misconfigs_mode: "goad", these configurations are applied based on hostname
+# Reference: https://mayfly277.github.io/categories/goad/
+#
+# GOAD v2 Attack Techniques Enabled:
+# - Password reuse between computers (PTH)
+# - Spray User = Password
+# - Password in description
+# - SMB share anonymous
+# - SMB not signed
+# - Responder (LLMNR/NBT-NS)
+# - Zerologon (if unpatched)
+# - Windows Defender (mixed)
+# - AS-REP Roasting
+# - Kerberoasting (via SPNs)
+# - AD ACL abuse (ForceChangePassword, GenericAll, GenericWrite, etc.)
+# - Unconstrained delegation
+# - NTLM relay
+# - Constrained delegation
+# - MSSQL exec / trusted link / impersonate
+# - IIS upload
+# - Multi-forest trusts
+# - Anonymous RPC user listing
+# - Child-parent domain escalation
+# - ADCS ESC1-8+
+# - Shadow credentials
+# - Printnightmare / Printerbug
+# - PetitPotam
+# - Drop the mic
+# - KrbRelayUp
+# - SamAccountName/noPac
+
+ludus_goad_misconfigs:
+  # ========================================
+  # DC02 (winterfell) - north.sevenkingdoms.local child DC
+  # Anonymous RPC listing enabled here
+  # ========================================
+  winterfell:
+    firewall_disabled: true
+    smb_signing_disabled: true
+    llmnr_enabled: true
+    nbt_ns_enabled: true
+    print_spooler_enabled: true
+    webclient_enabled: true
+    local_groups:
+      - group: "Administrators"
+        members:
+          - "NORTH\\eddard.stark"
+          - "NORTH\\catelyn.stark"
+          - "NORTH\\robb.stark"
+      - group: "Remote Desktop Users"
+        members:
+          - "NORTH\\Stark"
+    autologon:
+      enabled: true
+      user: "robb.stark"
+      password: "sexywolfy"
+      domain: "NORTH"
+    credential_manager:
+      - target: "TERMSRV/castelblack"
+        username: "NORTH\\robb.stark"
+        password: "sexywolfy"
+    asrep_roast_users:
+      - name: "brandon.stark"
+        domain: "north.sevenkingdoms.local"
+    unconstrained_delegation_users:
+      - name: "sansa.stark"
+        domain: "north.sevenkingdoms.local"
+    constrained_delegation_any:
+      - name: "jon.snow"
+        domain: "north.sevenkingdoms.local"
+        spns:
+          - "CIFS/winterfell.north.sevenkingdoms.local"
+        allowed_to_delegate:
+          - "CIFS/winterfell.north.sevenkingdoms.local"
+          - "CIFS/winterfell"
+    constrained_delegation_kerb_only:
+      - name: "CASTELBLACK$"
+        domain: "north.sevenkingdoms.local"
+        type: "computer"
+        spns:
+          - "HTTP/winterfell.north.sevenkingdoms.local"
+        allowed_to_delegate:
+          - "HTTP/winterfell.north.sevenkingdoms.local"
+          - "HTTP/winterfell"
+    scheduled_tasks:
+      - name: "ntlm_relay_bot"
+        description: "Simulates NTLM authentication to meereen share"
+        user: "NORTH\\eddard.stark"
+        password: "FightP3aceAndHonor!"
+        command: "cmd.exe"
+        arguments: '/c powershell -Command "New-PSDrive -Name X -PSProvider FileSystem -Root \\\\meereen\\Private -ErrorAction SilentlyContinue"'
+        repeat_interval: "PT5M"
+      - name: "rdp_bot"
+        description: "RDP connection simulation bot"
+        user: "NORTH\\robb.stark"
+        password: "sexywolfy"
+        command: "powershell.exe"
+        arguments: "-ExecutionPolicy Bypass -File C:\\setup\\bot_rdp.ps1"
+        repeat_interval: "PT1M"
+      - name: "responder_bot"
+        description: "Simulates NTLM authentication to braavos share"
+        user: "NORTH\\robb.stark"
+        password: "sexywolfy"
+        command: "cmd.exe"
+        arguments: '/c powershell -Command "New-PSDrive -Name Y -PSProvider FileSystem -Root \\\\braavos\\private -ErrorAction SilentlyContinue"'
+        repeat_interval: "PT2M"
+    gpo_abuse:
+      enabled: true
+      name: "StarkWallpaper"
+      link_target: "OU=Domain Controllers,DC=north,DC=sevenkingdoms,DC=local"
+      editors:
+        - name: "samwell.tarly"
+          permission: "GpoEditDeleteModifySecurity"
+
+  # ========================================
+  # DC01 (kingslanding) - sevenkingdoms.local forest root
+  # ADCS CA with ESC vulnerabilities
+  # ========================================
+  kingslanding:
+    firewall_disabled: true
+    smb_signing_disabled: true
+    print_spooler_enabled: true
+    webclient_enabled: true
+    local_groups:
+      - group: "Administrators"
+        members:
+          - "SEVENKINGDOMS\\robert.baratheon"
+          - "SEVENKINGDOMS\\cersei.lannister"
+          - "SEVENKINGDOMS\\DragonRider"
+      - group: "Remote Desktop Users"
+        members:
+          - "SEVENKINGDOMS\\Small Council"
+          - "SEVENKINGDOMS\\Baratheon"
+    account_not_delegated:
+      - name: "renly.baratheon"
+        domain: "sevenkingdoms.local"
+
+  # ========================================
+  # DC03 (meereen) - essos.local forest root
+  # NTLM downgrade + AS-REP roasting
+  # ========================================
+  meereen:
+    firewall_disabled: true
+    smb_signing_disabled: true
+    print_spooler_enabled: true
+    webclient_enabled: true
+    local_groups:
+      - group: "Administrators"
+        members:
+          - "ESSOS\\daenerys.targaryen"
+          - "ESSOS\\greatmaster"
+      - group: "Remote Desktop Users"
+        members:
+          - "ESSOS\\Targaryen"
+    ntlm_downgrade:
+      enabled: true
+      lm_compatibility_level: 2
+    asrep_roast_users:
+      - name: "missandei"
+        domain: "essos.local"
+
+  # ========================================
+  # SRV02 (castelblack) - north.sevenkingdoms.local member
+  # IIS + WebDAV + MSSQL server
+  # ========================================
+  castelblack:
+    firewall_disabled: true
+    smb_signing_disabled: true
+    print_spooler_enabled: true
+    webclient_enabled: true
+    local_groups:
+      - group: "Administrators"
+        members:
+          - "NORTH\\jeor.mormont"
+      - group: "Remote Desktop Users"
+        members:
+          - "NORTH\\Night Watch"
+          - "NORTH\\Mormont"
+          - "NORTH\\Stark"
+
+  # ========================================
+  # SRV03 (braavos) - essos.local member
+  # ADCS CA + MSSQL server + LSA PPL
+  # ========================================
+  braavos:
+    firewall_disabled: true
+    smb_signing_disabled: true
+    print_spooler_enabled: true
+    webclient_enabled: true
+    local_groups:
+      - group: "Administrators"
+        members:
+          - "ESSOS\\khal.drogo"
+      - group: "Remote Desktop Users"
+        members:
+          - "ESSOS\\Dothraki"
+    lsa_ppl_enabled: true

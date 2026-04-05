@@ -1,0 +1,19 @@
+---
+galaxy_info:
+  role_name: ludus_child_domain
+  author: badsectorlabs
+  description: Creates an AD child domain using microsoft.ad.domain_child module
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Windows
+      versions:
+        - 2019
+        - 2022
+  galaxy_tags:
+    - windows
+    - active_directory
+    - ludus
+    - child_domain
+
+dependencies: []

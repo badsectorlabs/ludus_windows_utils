@@ -1,0 +1,23 @@
+---
+galaxy_info:
+  role_name: ludus_ad_forest_trust
+  author: badsectorlabs
+  description: >
+    Creates bidirectional AD forest trusts and DNS conditional forwarders.
+    Optionally enables SID history on the trust for migration scenarios.
+  company: Bad Sector Labs
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Windows
+      versions:
+        - 2019
+        - 2022
+  galaxy_tags:
+    - windows
+    - active_directory
+    - ludus
+    - forest_trust
+    - dns
+
+dependencies: []

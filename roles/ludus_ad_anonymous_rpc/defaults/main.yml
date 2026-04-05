@@ -1,0 +1,67 @@
+---
+# ludus_ad_anonymous_rpc - Anonymous RPC/SMB Enumeration Configuration
+# Default configuration variables
+
+# =============================================================================
+# ANONYMOUS ENUMERATION SETTINGS
+# =============================================================================
+
+# Enable anonymous SAM enumeration (allows null session user/group listing)
+# This allows tools like enum4linux, rpcclient to enumerate without creds
+ludus_anonymous_sam_enumeration: true
+
+# Enable anonymous LSA enumeration (allows SID enumeration)
+ludus_anonymous_lsa_enumeration: true
+
+# RestrictAnonymous settings:
+# 0 = Rely on default permissions (most permissive)
+# 1 = Do not allow enumeration of SAM accounts and shares (default)
+# 2 = No access without explicit anonymous permissions (most restrictive)
+ludus_restrict_anonymous: 0
+
+# RestrictAnonymousSAM settings:
+# 0 = Allow anonymous enumeration of SAM accounts
+# 1 = Do not allow anonymous enumeration (default)
+ludus_restrict_anonymous_sam: 0
+
+# Enable anonymous access to named pipes
+# Allows null session access to specific pipes
+ludus_anonymous_named_pipes:
+  - "netlogon"
+  - "samr"
+  - "lsarpc"
+  - "srvsvc"
+  - "browser"
+
+# Enable "Everyone" in anonymous token
+# When enabled, anonymous users get Everyone group permissions
+ludus_everyone_includes_anonymous: true
+
+# Allow null session fallback for older clients
+ludus_null_session_fallback: true
+
+# =============================================================================
+# ATTACK TECHNIQUES ENABLED
+# =============================================================================
+# These settings enable the following attack techniques:
+#
+# 1. Anonymous RPC User Enumeration (rpcclient -U '' -N)
+#    - Enumerate domain users via samr pipe
+#    - Enumerate domain groups via samr pipe
+#    - Get user info, SIDs, password policy
+#
+# 2. Anonymous SMB Share Enumeration
+#    - List available shares without authentication
+#    - Access null session shares
+#
+# 3. LSA SID Enumeration (lookupsid.py)
+#    - Convert SIDs to usernames
+#    - Enumerate trusted domains
+#
+# 4. Tools that benefit:
+#    - enum4linux / enum4linux-ng
+#    - rpcclient
+#    - smbclient
+#    - impacket lookupsid.py
+#    - CrackMapExec anonymous enumeration
+# =============================================================================

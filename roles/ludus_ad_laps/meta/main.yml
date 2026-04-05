@@ -1,0 +1,26 @@
+---
+galaxy_info:
+  role_name: ludus_ad_laps
+  author: badsectorlabs
+  description: >
+    Configures Microsoft LAPS (Local Administrator Password Solution).
+    Supports DC-side setup (schema extension, GPO, DACL) and client-side
+    installation with automatic OU placement.
+  company: Bad Sector Labs
+  license: MIT
+  version: "0.3.0"
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Windows
+      versions:
+        - 2019
+        - 2022
+  galaxy_tags:
+    - windows
+    - active_directory
+    - ludus
+    - laps
+    - security
+    - password_management
+
+dependencies: []

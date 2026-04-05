@@ -1,0 +1,27 @@
+---
+galaxy_info:
+  role_name: ludus_bulk_ad_content
+  author: badsectorlabs
+  description: >
+    Bulk Active Directory content creation with three modes: GOAD dataset,
+    custom user-provided data, or randomized generation. Creates OUs, groups
+    (global, domain-local, universal), users with passwords/SPNs/group memberships,
+    and configures domain password policy. Runs AFTER Ludus core roles.
+  company: Bad Sector Labs
+  license: MIT
+  version: "0.3.0"
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Windows
+      versions:
+        - 2019
+        - 2022
+  galaxy_tags:
+    - windows
+    - active_directory
+    - ludus
+    - security_lab
+    - ad_users
+    - ad_groups
+
+dependencies: []

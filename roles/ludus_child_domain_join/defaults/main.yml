@@ -1,0 +1,22 @@
+---
+# ludus_child_domain_join - Default Variables
+#
+# Required variables (must be set in role_vars):
+#   ludus_child_domain_fqdn  - The FQDN of the child domain to join (e.g., north.sevenkingdoms.local)
+#   ludus_child_dc_ip        - The IP address of the child domain DC
+#   ludus_parent_domain_fqdn - The FQDN of the parent/root domain (for Enterprise Admin credentials)
+
+# Child domain FQDN to join (e.g., "north.sevenkingdoms.local")
+ludus_child_domain_fqdn: ""
+
+# Child domain DC IP address (for DNS)
+ludus_child_dc_ip: ""
+
+# Parent/root domain FQDN (e.g., "sevenkingdoms.local")
+# Needed because we use Enterprise Admin credentials from the parent domain
+ludus_parent_domain_fqdn: ""
+
+# Optional - defaults to Ludus defaults if not specified
+# Uses PARENT domain admin (Enterprise Admin) credentials - NOT child domain
+# ludus_domain_admin_user: "domainadmin@sevenkingdoms.local"
+# ludus_domain_admin_password: "password"

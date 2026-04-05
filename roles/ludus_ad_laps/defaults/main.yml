@@ -1,0 +1,36 @@
+---
+# ludus_ad_laps - Microsoft LAPS configuration
+#
+# This role uses Ludus-provided variables automatically:
+#   - ludus_domain_fqdn (from range config)
+#   - ludus_dc_vm_name (for delegation)
+#   - defaults.ad_domain_admin / defaults.ad_domain_admin_password
+
+# Domain admin credentials (uses Ludus defaults automatically)
+ludus_laps_domain_admin: "{{ defaults.ad_domain_admin | default('Administrator') }}"
+ludus_laps_domain_admin_password: "{{ defaults.ad_domain_admin_password | default('password') }}"
+
+# Domain FQDN for become credentials during delegation
+# Automatically uses Ludus-provided ludus_domain_fqdn when available
+# For standalone/custom ranges without Ludus injection, set this explicitly in role_vars
+ludus_laps_domain_fqdn: ""
+
+# =============================================================================
+# LAPS CONFIGURATION
+# =============================================================================
+# LAPS MSI download URL (Microsoft official)
+ludus_laps_msi_url: "https://download.microsoft.com/download/C/7/A/C7AAD914-A8A6-4904-88A1-29E657445D03/LAPS.x64.msi"
+
+# OU where LAPS-managed computers will be placed
+ludus_laps_ou: ""                       # e.g., "OU=Laps,DC=domain,DC=local"
+
+# GPO name for LAPS settings
+ludus_laps_gpo_name: "LAPS Policy"
+
+# Users/groups that can read LAPS passwords
+ludus_laps_readers: []
+#   - "Domain Admins"
+#   - "IT-Helpdesk"
+
+# Set to true when running on a client (not DC) to install client and move to OU
+ludus_laps_client_only: false

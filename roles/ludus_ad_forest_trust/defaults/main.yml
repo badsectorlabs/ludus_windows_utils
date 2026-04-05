@@ -1,0 +1,38 @@
+---
+# ludus_ad_forest_trust - Forest trust and DNS conditional forwarder configuration
+#
+# This role uses Ludus-provided variables automatically:
+#   - ludus_domain_fqdn (from range config)
+#   - defaults.ad_domain_admin / defaults.ad_domain_admin_password
+
+# Domain admin credentials
+ludus_trust_domain_admin: "{{ defaults.ad_domain_admin | default('Administrator') }}"
+ludus_trust_domain_admin_password: "{{ defaults.ad_domain_admin_password | default('password') }}"
+
+# =============================================================================
+# TRUST CONFIGURATION
+# =============================================================================
+# Partner domain to establish trust with
+ludus_trust_partner_domain: ""          # e.g., "essos.local"
+ludus_trust_partner_dc_ip: ""           # IP of partner domain DC
+
+# DNS conditional forwarder settings
+ludus_dns_forward_zone: ""              # Usually same as partner domain
+ludus_dns_forward_server: ""            # Usually same as partner DC IP
+
+# Enable SID history on the trust (for migration scenarios / attack paths)
+ludus_enable_sid_history: false
+
+# =============================================================================
+# CROSS-DOMAIN GROUP MEMBERS
+# Add members from trusted domains to local groups (runs after trust is established)
+# =============================================================================
+# Example format:
+# ludus_cross_domain_group_members:
+#   - group: "AcrossTheNarrowSea"
+#     members:
+#       - "essos.local\\daenerys.targaryen"
+#   - group: "DragonsFriends"
+#     members:
+#       - "sevenkingdoms.local\\tyron.lannister"
+ludus_cross_domain_group_members: []

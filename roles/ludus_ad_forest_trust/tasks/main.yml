@@ -1,0 +1,210 @@
+---
+# ludus_ad_forest_trust — Creates AD forest trust and DNS conditional forwarder
+# NOTE: This role does NOT use ansible become/runas to avoid the 0xC0000005 crash
+# on Windows Server 2022. Instead, credentials are passed directly to PowerShell
+# cmdlets and .NET methods that need them.
+
+- name: Validate required variables
+  ansible.builtin.assert:
+    that:
+      - ludus_trust_partner_domain | length > 0
+      - ludus_trust_partner_dc_ip | length > 0
+      - ludus_dns_forward_zone | length > 0
+      - ludus_dns_forward_server | length > 0
+    fail_msg: "ludus_trust_partner_domain, ludus_trust_partner_dc_ip, ludus_dns_forward_zone, and ludus_dns_forward_server must all be set."
+
+- name: Display trust configuration
+  ansible.builtin.debug:
+    msg:
+      - "Local domain: {{ ludus_domain_fqdn }}"
+      - "Partner domain: {{ ludus_trust_partner_domain }}"
+      - "Partner DC IP: {{ ludus_trust_partner_dc_ip }}"
+      - "DNS forward zone: {{ ludus_dns_forward_zone }}"
+      - "DNS forward server: {{ ludus_dns_forward_server }}"
+      - "Admin user: {{ ludus_trust_domain_admin }}"
+      - "SID History: {{ ludus_enable_sid_history }}"
+
+# ============================================================
+# DNS Conditional Forwarder
+# No become needed — DNS cmdlets run fine as the connected user
+# ============================================================
+- name: Create DNS conditional forwarder for partner domain
+  ansible.windows.win_powershell:
+    script: |
+      [CmdletBinding()]
+      param (
+        [String]$Zone,
+        [String]$MasterServers
+      )
+      Import-Module DNSServer
+      $existing = Get-DnsServerZone -Name $Zone -ErrorAction SilentlyContinue
+      if ($existing) {
+        Set-DnsServerConditionalForwarderZone -Name $Zone -MasterServers $MasterServers
+        Write-Output "Forwarder for $Zone already exists, updated"
+        $Ansible.Changed = $false
+      } else {
+        Add-DnsServerConditionalForwarderZone `
+          -Name $Zone `
+          -MasterServers $MasterServers `
+          -PassThru
+        Write-Output "Created forwarder for $Zone -> $MasterServers"
+        $Ansible.Changed = $true
+      }
+    parameters:
+      Zone: "{{ ludus_dns_forward_zone }}"
+      MasterServers: "{{ ludus_dns_forward_server }}"
+
+- name: Flush DNS after adding forwarder
+  ansible.windows.win_command: ipconfig /flushdns
+  changed_when: false
+
+# ============================================================
+# Forest Trust — credentials embedded in PowerShell script
+# This avoids the become/runas 0xC0000005 crash on Win2022
+# ============================================================
+- name: Create bidirectional forest trust
+  ansible.windows.win_powershell:
+    script: |
+      [CmdletBinding()]
+      param (
+        [String]$LocalDomain,
+        [String]$LocalAdmin,
+        [String]$LocalAdminPassword,
+        [String]$RemoteForest,
+        [String]$RemoteAdmin,
+        [String]$RemoteAdminPassword
+      )
+
+      # Build local credential and get local forest via explicit context
+      $localSecPwd = ConvertTo-SecureString $LocalAdminPassword -AsPlainText -Force
+      $localCred = New-Object System.Management.Automation.PSCredential("$LocalDomain\$LocalAdmin", $localSecPwd)
+
+      $localContext = New-Object -TypeName "System.DirectoryServices.ActiveDirectory.DirectoryContext" `
+        -ArgumentList @("Forest", $LocalDomain, "$LocalDomain\$LocalAdmin", $LocalAdminPassword)
+      $localForest = [System.DirectoryServices.ActiveDirectory.Forest]::getForest($localContext)
+
+      # Check if trust already exists
+      try {
+        $localForest.GetTrustRelationship($RemoteForest)
+        Write-Output "Trust with $RemoteForest already exists"
+        $Ansible.Changed = $false
+        return
+      } catch [System.DirectoryServices.ActiveDirectory.ActiveDirectoryObjectNotFoundException] {
+        # Trust doesn't exist, proceed to create it
+      }
+
+      # Build remote forest context
+      $remoteContext = New-Object -TypeName "System.DirectoryServices.ActiveDirectory.DirectoryContext" `
+        -ArgumentList @("Forest", $RemoteForest, $RemoteAdmin, $RemoteAdminPassword)
+      $distantForest = [System.DirectoryServices.ActiveDirectory.Forest]::getForest($remoteContext)
+
+      # Create bidirectional trust
+      $localForest.CreateTrustRelationship($distantForest, "Bidirectional")
+      Write-Output "Created bidirectional trust: $LocalDomain <-> $RemoteForest"
+      $Ansible.Changed = $true
+    error_action: stop
+    parameters:
+      LocalDomain: "{{ ludus_domain_fqdn }}"
+      LocalAdmin: "{{ ludus_trust_domain_admin }}"
+      LocalAdminPassword: "{{ ludus_trust_domain_admin_password }}"
+      RemoteForest: "{{ ludus_trust_partner_domain }}"
+      RemoteAdmin: "{{ ludus_trust_partner_domain }}\\{{ ludus_trust_domain_admin }}"
+      RemoteAdminPassword: "{{ ludus_trust_domain_admin_password }}"
+  register: trust_result
+
+- name: Reboot after trust creation if changed
+  ansible.windows.win_reboot:
+    reboot_timeout: 600
+    post_reboot_delay: 30
+    test_command: "Get-ADUser -Identity Administrator -Properties *"
+  when: trust_result.changed | default(false)
+
+# ============================================================
+# SID History — no become needed, netdom runs as connected user
+# ============================================================
+- name: Enable SID History on the trust
+  ansible.windows.win_powershell:
+    script: |
+      [CmdletBinding()]
+      param (
+        [String]$LocalDomain,
+        [String]$RemoteDomain
+      )
+
+      # Check current SID history status
+      $output = netdom trust $LocalDomain /d:$RemoteDomain /querySIDhistory 2>&1
+
+      if ($output -match "SID history is enabled" -or $output -match "already enabled") {
+        Write-Output "SID history already enabled"
+        $Ansible.Changed = $false
+        return
+      }
+
+      # Enable SID history
+      $result = netdom trust $LocalDomain /d:$RemoteDomain /enablesidhistory:yes 2>&1
+      if ($LASTEXITCODE -eq 0) {
+        Write-Output "SID history enabled successfully"
+        $Ansible.Changed = $true
+      } else {
+        Write-Output "Warning: SID history enable returned non-zero but may still work: $result"
+        $Ansible.Changed = $false
+      }
+    parameters:
+      LocalDomain: "{{ ludus_domain_fqdn }}"
+      RemoteDomain: "{{ ludus_trust_partner_domain }}"
+  when: ludus_enable_sid_history | bool
+
+- name: Show trust status
+  ansible.windows.win_powershell:
+    script: |
+      $trusts = Get-CimInstance -Class Microsoft_DomainTrustStatus `
+        -Namespace root\microsoftactivedirectory -ErrorAction SilentlyContinue
+      if ($trusts) {
+        $trusts | ForEach-Object {
+          Write-Output "Trust: $($_.TrustedDomain) - Status: $($_.TrustStatusString) - Direction: $($_.TrustDirection)"
+        }
+      } else {
+        Write-Output "No trust status available via WMI"
+      }
+      $Ansible.Changed = $false
+
+# ============================================================
+# Cross-Domain Group Members (runs AFTER trust is established)
+# No become needed — AD cmdlets run fine as domain admin
+# ============================================================
+- name: Add cross-domain members to groups
+  ansible.windows.win_powershell:
+    script: |
+      [CmdletBinding()]
+      param (
+        [String]$GroupName,
+        [String[]]$Members
+      )
+
+      Import-Module ActiveDirectory
+
+      $changed = $false
+      foreach ($member in $Members) {
+        try {
+          Add-ADGroupMember -Identity $GroupName -Members $member -ErrorAction Stop
+          Write-Output "Added $member to $GroupName"
+          $changed = $true
+        } catch [Microsoft.ActiveDirectory.Management.ADException] {
+          if ($_.Exception.Message -match "already a member") {
+            Write-Output "$member is already a member of $GroupName"
+          } else {
+            Write-Output "Warning adding $member to $GroupName : $($_.Exception.Message)"
+          }
+        } catch {
+          Write-Output "Warning: $($_.Exception.Message)"
+        }
+      }
+
+      $Ansible.Changed = $changed
+    parameters:
+      GroupName: "{{ item.group }}"
+      Members: "{{ item.members }}"
+  loop: "{{ ludus_cross_domain_group_members | default([]) }}"
+  loop_control:
+    label: "{{ item.group }}"
+  when: ludus_cross_domain_group_members is defined and ludus_cross_domain_group_members | length > 0

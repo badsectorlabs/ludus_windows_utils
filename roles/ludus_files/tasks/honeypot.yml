@@ -1,0 +1,266 @@
+---
+# ludus_files — Honeypot file generation
+# Creates realistic bait files that look valuable during post-exploitation
+# Practitioners practice: file enumeration, sensitive data discovery, share pillaging
+
+# =============================================================================
+# CREATE HONEYPOT DIRECTORIES
+# =============================================================================
+
+- name: Create honeypot target directories
+  ansible.windows.win_file:
+    path: "{{ hp_dir }}"
+    state: directory
+  loop: "{{ ludus_honeypot_locations }}"
+  loop_control:
+    loop_var: hp_dir
+    label: "{{ hp_dir }}"
+  ignore_errors: true
+
+# =============================================================================
+# CREDENTIALS CATEGORY — Password files, exports, SSH keys
+# Attack technique: Post-exploitation credential harvesting
+# =============================================================================
+
+- name: Deploy credential honey files
+  when: "'credentials' in ludus_honeypot_categories"
+  block:
+    - name: "Honeypot — passwords.txt (common admin mistake)"
+      ansible.windows.win_copy:
+        content: |
+          ========================================
+          {{ ludus_honeypot_company_name }} - IT Department
+          Service Account Passwords
+          Last Updated: {{ '%Y-%m' | strftime }}
+          ========================================
+
+          == Domain Accounts ==
+          svc_backup    : Backup2024!Summer
+          svc_sql       : SQLpr0d#2024
+          svc_web       : W3bApp$ecure99
+          svc_monitor   : M0n!t0r_2024
+
+          == Local Admin ==
+          .\Administrator : {{ ludus_honeypot_company_name }}Admin2024!
+
+          == SQL SA ==
+          sa : Pr0duct10n_DB#2024
+
+          == NOTES ==
+          - Change quarterly (next: {{ '%Y' | strftime }}-Q3)
+          - svc_backup has backup operator rights on all DCs
+          - svc_sql runs on {{ ansible_hostname }} port 1433
+        dest: "{{ ludus_honeypot_locations[0] }}\\passwords.txt"
+
+    - name: "Honeypot — KeePass export CSV"
+      ansible.windows.win_copy:
+        content: |
+          "Group","Title","Username","Password","URL","Notes"
+          "Domain Accounts","Domain Admin","{{ ludus_honeypot_company_name }}\domainadmin","P@ssw0rd2024!","","Primary DA - USE WITH CAUTION"
+          "Domain Accounts","Backup Service","{{ ludus_honeypot_company_name }}\svc_backup","Backup2024!Summer","","Runs nightly at 2 AM"
+          "Servers","{{ ansible_hostname }} RDP","Administrator","L0c@lAdm1n#2024","rdp://{{ ansible_hostname }}","Local admin - server room"
+          "Servers","SQL Server SA","sa","Pr0duct10n_DB#2024","{{ ansible_hostname }}:1433","MSSQL production instance"
+          "Network","Firewall Admin","admin","Fw@dm1n_2024!","https://10.{{ range_second_octet | default('1') }}.10.254","Palo Alto management"
+          "Network","vCenter","administrator@vsphere.local","VMw@re2024#","https://vcenter.{{ ludus_honeypot_domain }}","ESXi management"
+          "Cloud","Azure AD","azure_admin@{{ ludus_honeypot_domain }}","Cl0ud$ync_2024","https://portal.azure.com","Azure AD Connect sync account"
+        dest: "{{ ludus_honeypot_locations[0] }}\\keepass_export_{{ '%Y%m' | strftime }}.csv"
+
+    - name: "Honeypot — old_passwords.xlsx.txt (legacy artifact)"
+      ansible.windows.win_copy:
+        content: |
+          PASSWORDS - DO NOT SHARE
+          ========================
+          Last review: 2023-06-15
+
+          robert.baratheon / iamthek1ng (EXPIRED - DO NOT USE)
+          cersei.lannister / il0vejaime (domain admin)
+          eddard.stark / h0nor&duty (north domain admin)
+          jon.snow / !kn0wn0thing (sql access)
+
+          VPN: vpn.{{ ludus_honeypot_domain }} / admin / VPN@ccess2023
+          WiFi PSK: {{ ludus_honeypot_company_name }}WiFi2023!
+        dest: "{{ ludus_honeypot_locations[1] | default(ludus_honeypot_locations[0]) }}\\old_passwords.xlsx.txt"
+      when: ludus_honeypot_include_legacy | bool
+
+# =============================================================================
+# IT CATEGORY — Network diagrams, server lists, configs
+# Attack technique: Internal recon, pivoting target discovery
+# =============================================================================
+
+- name: Deploy IT honey files
+  when: "'it' in ludus_honeypot_categories"
+  block:
+    - name: "Honeypot — server_inventory.csv"
+      ansible.windows.win_copy:
+        content: |
+          "Hostname","IP","Role","OS","Admin Contact","Notes"
+          "DC01","10.{{ range_second_octet | default('1') }}.10.10","Domain Controller","Windows Server 2022","IT Team","Primary DC - {{ ludus_honeypot_domain }}"
+          "DC02","10.{{ range_second_octet | default('1') }}.10.11","Domain Controller","Windows Server 2022","IT Team","Child domain DC"
+          "SRV01","10.{{ range_second_octet | default('1') }}.10.12","File/Web Server","Windows Server 2022","IT Team","IIS + WebDAV + MSSQL"
+          "SRV02","10.{{ range_second_octet | default('1') }}.10.13","Application Server","Windows Server 2022","IT Team","MSSQL + linked servers"
+          "BACKUP","10.{{ range_second_octet | default('1') }}.10.20","Backup Server","Windows Server 2019","IT Team","Veeam - svc_backup account"
+          "SIEM","10.{{ range_second_octet | default('1') }}.99.10","SIEM/Logging","Ubuntu 22.04","Security Team","ELK Stack - root/elk@dm1n"
+          "KALI","10.{{ range_second_octet | default('1') }}.99.1","Pentest Box","Kali Linux","Red Team","Authorized pentest platform"
+        dest: "{{ ludus_honeypot_locations[0] }}\\server_inventory.csv"
+
+    - name: "Honeypot — backup_config.txt"
+      ansible.windows.win_copy:
+        content: |
+          # {{ ludus_honeypot_company_name }} Backup Configuration
+          # Veeam Backup & Replication
+          # Last modified: {{ '%Y-%m-%d' | strftime }}
+
+          [Connection]
+          Server = backup.{{ ludus_honeypot_domain }}
+          Port = 9392
+          Username = {{ ludus_honeypot_company_name }}\svc_backup
+          Password = Backup2024!Summer
+
+          [Schedule]
+          FullBackup = Sunday 02:00
+          IncrementalBackup = Daily 22:00
+          RetentionDays = 30
+
+          [Targets]
+          DC01 = Full + SystemState
+          DC02 = Full + SystemState
+          SRV01 = Full + SQL
+          SRV02 = Full + SQL
+          FileServer = Full
+
+          [Repository]
+          Path = \\backup.{{ ludus_honeypot_domain }}\BackupRepo$
+          EncryptionKey = V33@m_3ncrypt!0n_K3y
+        dest: "{{ ludus_honeypot_locations[3] | default(ludus_honeypot_locations[0]) }}\\backup_config.txt"
+
+    - name: "Honeypot — network_diagram.txt"
+      ansible.windows.win_copy:
+        content: |
+          {{ ludus_honeypot_company_name }} Network Architecture
+          ========================================
+          Last updated: {{ '%Y-%m-%d' | strftime }}
+
+          ┌─────────────────────────────────────────┐
+          │              INTERNET                     │
+          └─────────────┬───────────────────────────┘
+                        │
+                   ┌────┴────┐
+                   │ Firewall │  10.{{ range_second_octet | default('1') }}.10.254
+                   │ PA-3220  │  admin / Fw@dm1n_2024!
+                   └────┬────┘
+                        │
+              ┌─────────┼─────────┐
+              │ VLAN 10 │ VLAN 20 │ VLAN 99
+              │ Servers │ Users   │ Security
+              │         │         │
+          ┌───┴───┐  ┌──┴──┐  ┌──┴──┐
+          │ DC01  │  │ DC03│  │KALI │
+          │ .10   │  │ .10 │  │ .1  │
+          │ CA    │  │ CA  │  │     │
+          └───────┘  └─────┘  └─────┘
+
+          TRUST: {{ ludus_honeypot_domain }} <-> essos.local (bidirectional)
+          CHILD: north.{{ ludus_honeypot_domain.split('.')[0] }}.local
+
+          VPN: vpn.{{ ludus_honeypot_domain }} (WireGuard)
+          Jump Box: 10.{{ range_second_octet | default('1') }}.99.1 (SSH: kali/kali)
+        dest: "{{ ludus_honeypot_locations[0] }}\\network_diagram.txt"
+
+# =============================================================================
+# HR CATEGORY — Employee data, salary info
+# Attack technique: Social engineering prep, targeted phishing
+# =============================================================================
+
+- name: Deploy HR honey files
+  when: "'hr' in ludus_honeypot_categories"
+  block:
+    - name: "Honeypot — employee_directory.csv"
+      ansible.windows.win_copy:
+        content: |
+          "Name","Title","Department","Email","Phone","Manager","Start Date"
+          "Robert Baratheon","CEO","Executive","robert.b@{{ ludus_honeypot_domain }}","x1001","Board","2015-01-15"
+          "Cersei Lannister","CFO","Finance","cersei.l@{{ ludus_honeypot_domain }}","x1002","Robert Baratheon","2016-03-01"
+          "Tywin Lannister","CTO","Technology","tywin.l@{{ ludus_honeypot_domain }}","x1003","Robert Baratheon","2015-06-01"
+          "Eddard Stark","VP Engineering","Technology","eddard.s@{{ ludus_honeypot_domain }}","x2001","Tywin Lannister","2018-02-15"
+          "Jon Snow","Senior DBA","Technology","jon.s@{{ ludus_honeypot_domain }}","x2002","Eddard Stark","2020-07-01"
+          "Samwell Tarly","Junior Developer","Technology","samwell.t@{{ ludus_honeypot_domain }}","x2003","Eddard Stark","2022-01-10"
+          "Daenerys Targaryen","VP Operations","Operations","daenerys.t@{{ ludus_honeypot_domain }}","x3001","Robert Baratheon","2017-09-01"
+          "Jorah Mormont","Security Analyst","Security","jorah.m@{{ ludus_honeypot_domain }}","x3002","Daenerys Targaryen","2019-11-15"
+        dest: "{{ ludus_honeypot_locations[0] }}\\employee_directory.csv"
+
+# =============================================================================
+# FINANCIAL CATEGORY — Budget data, payment info
+# Attack technique: Business email compromise prep, data exfiltration value
+# =============================================================================
+
+- name: Deploy financial honey files
+  when: "'financial' in ludus_honeypot_categories"
+  block:
+    - name: "Honeypot — Q4_budget_draft.csv"
+      ansible.windows.win_copy:
+        content: |
+          "Department","Q1 Actual","Q2 Actual","Q3 Forecast","Q4 Budget","Notes"
+          "Technology","$2,450,000","$2,380,000","$2,500,000","$3,100,000","Cloud migration + new SIEM"
+          "Security","$850,000","$920,000","$900,000","$1,200,000","Pentest vendor + MDR"
+          "HR","$1,200,000","$1,150,000","$1,200,000","$1,300,000","New hires Q4"
+          "Operations","$3,400,000","$3,200,000","$3,300,000","$3,500,000","Datacenter lease renewal"
+          "Executive","$800,000","$750,000","$800,000","$900,000","Board retreat + travel"
+          "TOTAL","$8,700,000","$8,400,000","$8,700,000","$10,000,000",""
+        dest: "{{ ludus_honeypot_locations[0] }}\\Q4_budget_draft.csv"
+
+# =============================================================================
+# EXECUTIVE CATEGORY — Strategy docs, M&A, board notes
+# Attack technique: High-value data exfiltration targets
+# =============================================================================
+
+- name: Deploy executive honey files
+  when: "'executive' in ludus_honeypot_categories"
+  block:
+    - name: "Honeypot — board_meeting_notes_CONFIDENTIAL.txt"
+      ansible.windows.win_copy:
+        content: |
+          ============================================
+          {{ ludus_honeypot_company_name }} — BOARD MEETING NOTES
+          STRICTLY CONFIDENTIAL
+          Date: {{ '%Y-%m-%d' | strftime }}
+          ============================================
+
+          ATTENDEES: Robert B. (CEO), Cersei L. (CFO), Tywin L. (CTO)
+
+          1. ACQUISITION UPDATE
+             - Target: DragonTech Solutions (essos.local domain)
+             - Valuation: $45M
+             - Due diligence: IT integration assessment in progress
+             - AD trust already configured for pilot (bidirectional forest trust)
+             - Decision deadline: Q4 {{ '%Y' | strftime }}
+
+          2. SECURITY POSTURE
+             - Penetration test scheduled for next month
+             - CISO position still unfilled — Jorah Mormont interim
+             - Incident: Unauthorized MSSQL linked server found between
+               castelblack and braavos — investigating
+             - ACTION: Review all service account passwords (svc_* accounts)
+
+          3. COMPLIANCE
+             - SOC 2 Type II audit Q1 next year
+             - PCI DSS: need to segment MSSQL servers
+             - LAPS deployment 60% complete (essos domain only)
+
+          4. BUDGET
+             - Security budget increase approved ($1.2M → $1.8M)
+             - New SIEM deployment: ELK stack on 10.{{ range_second_octet | default('1') }}.99.10
+
+          NEXT MEETING: {{ '%Y-%m' | strftime }}-28
+        dest: "{{ ludus_honeypot_locations[1] | default(ludus_honeypot_locations[0]) }}\\board_meeting_notes_CONFIDENTIAL.txt"
+
+# =============================================================================
+# SUMMARY
+# =============================================================================
+
+- name: Log honeypot deployment
+  ansible.builtin.debug:
+    msg: |
+      Honeypot files deployed:
+        Categories: {{ ludus_honeypot_categories | join(', ') }}
+        Locations: {{ ludus_honeypot_locations | length }}
+        Include legacy files: {{ ludus_honeypot_include_legacy }}

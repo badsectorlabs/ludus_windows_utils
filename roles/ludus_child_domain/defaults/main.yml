@@ -1,0 +1,28 @@
+---
+# ludus_child_domain - Default Variables
+#
+# Required variables (must be set in role_vars):
+#   ludus_child_domain_fqdn    - The FQDN of the child domain to create (e.g., north.sevenkingdoms.local)
+#   ludus_parent_domain_fqdn   - The FQDN of the parent domain (e.g., sevenkingdoms.local)
+#   ludus_parent_dc_ip         - The IP address of the parent domain controller
+#
+# Note: ludus_vm_ip is automatically provided by Ludus during role execution
+
+# Child domain FQDN (e.g., "north.sevenkingdoms.local")
+ludus_child_domain_fqdn: ""
+
+# Parent domain FQDN (e.g., "sevenkingdoms.local")
+ludus_parent_domain_fqdn: ""
+
+# Parent domain controller IP address
+ludus_parent_dc_ip: ""
+
+# Optional - defaults to Ludus defaults if not specified
+# Domain admin credentials for the parent domain
+# Format: user@domain.fqdn (UPN format)
+# ludus_domain_admin_user: "domainadmin@sevenkingdoms.local"
+# ludus_domain_admin_password: "password"
+# ludus_safe_mode_password: "password"
+
+# Create DNS delegation in parent domain (recommended: true)
+ludus_create_dns_delegation: true

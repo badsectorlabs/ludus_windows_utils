@@ -1,0 +1,360 @@
+---
+# ludus_bulk_ad_content - Bulk Active Directory content creation
+# Supports three modes: goad, custom, random
+#
+# This role runs AFTER Ludus core roles. The following variables are available:
+#   - ludus_domain_fqdn (e.g., "sevenkingdoms.local")
+#   - ludus_domain_netbios_name (e.g., "SEVENKINGDOMS")
+#   - ludus_domain_fqdn_tail (e.g., "local")
+#   - ludus_dc_vm_name, ludus_dc_ip, ludus_dc_hostname
+#   - defaults.ad_domain_admin, defaults.ad_domain_admin_password
+
+# =============================================================================
+# DOMAIN CONFIGURATION
+# Use Ludus-provided variables, with fallback for child domains and standalone testing
+# Priority: ludus_domain_fqdn > ludus_child_domain_fqdn > ludus_domain_name
+# =============================================================================
+- name: Set domain name fact
+  ansible.builtin.set_fact:
+    _ludus_domain_name: "{{ ludus_domain_fqdn | default(ludus_child_domain_fqdn) | default(ludus_domain_name) | default('') }}"
+    _ludus_domain_admin: "{{ defaults.ad_domain_admin | default(ludus_domain_admin) | default('Administrator') }}"
+    _ludus_domain_admin_password: "{{ defaults.ad_domain_admin_password | default(ludus_domain_admin_password) | default('password') }}"
+
+- name: Set domain netbios fact
+  ansible.builtin.set_fact:
+    _ludus_domain_netbios: "{{ ludus_domain_netbios_name | default(ludus_domain_netbios) | default(_ludus_domain_name.split('.')[0]) | upper }}"
+  when: _ludus_domain_name | length > 0
+
+- name: Validate domain name is set
+  ansible.builtin.assert:
+    that:
+      - _ludus_domain_name | length > 0
+    fail_msg: "Domain name not available. Ensure this VM has domain.fqdn set in the range config."
+
+- name: Display configuration
+  ansible.builtin.debug:
+    msg: |
+      ludus_bulk_ad_content Configuration:
+        Mode: {{ ludus_ad_content_mode }}
+        Domain: {{ _ludus_domain_name }}
+        NetBIOS: {{ _ludus_domain_netbios }}
+
+# =============================================================================
+# MODE: RANDOM - Generate content using Python script (runs locally)
+# =============================================================================
+- name: Generate random AD content
+  when: ludus_ad_content_mode == "random"
+  block:
+    - name: Ensure role files directory path is set
+      ansible.builtin.set_fact:
+        _role_files_path: "{{ role_path }}/files"
+      delegate_to: localhost
+
+    - name: Create temporary virtualenv directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: ludus_ad_random_
+      register: _random_venv_dir
+      delegate_to: localhost
+
+    - name: Create virtualenv and install dependencies
+      ansible.builtin.pip:
+        name:
+          - faker
+        virtualenv: "{{ _random_venv_dir.path }}/venv"
+        virtualenv_command: python3 -m venv
+      delegate_to: localhost
+      ignore_errors: true
+      register: _pip_result
+
+    - name: Log if Faker installation failed (will use fallback)
+      ansible.builtin.debug:
+        msg: "Faker installation failed, using simple random generator fallback"
+      when: _pip_result.failed | default(false)
+      delegate_to: localhost
+
+    - name: Run random content generator locally
+      ansible.builtin.command:
+        cmd: >
+          {{ _random_venv_dir.path }}/venv/bin/python
+          {{ _role_files_path }}/generate_random_ad.py
+          --domain "{{ _ludus_domain_name }}"
+          --config '{{ ludus_random_config | to_json }}'
+          {{ ('--seed ' ~ ludus_random_config.seed) if ludus_random_config.seed else '' }}
+      register: _random_output
+      delegate_to: localhost
+      changed_when: false
+
+    - name: Parse generated content
+      ansible.builtin.set_fact:
+        _ludus_ad_data: "{{ _random_output.stdout | from_json }}"
+
+    - name: Display generated content summary
+      ansible.builtin.debug:
+        msg: |
+          Random AD content generated:
+            Users: {{ _ludus_ad_data.users | length }}
+            Groups: {{ (_ludus_ad_data.groups.global | length) + (_ludus_ad_data.groups.domainlocal | length) + (_ludus_ad_data.groups.universal | length) }}
+            OUs: {{ _ludus_ad_data.organisation_units | length }}
+            Faker used: {{ _ludus_ad_data._meta.faker_used | default('unknown') }}
+      delegate_to: localhost
+
+    - name: Cleanup temporary virtualenv
+      ansible.builtin.file:
+        path: "{{ _random_venv_dir.path }}"
+        state: absent
+      delegate_to: localhost
+
+# =============================================================================
+# MODE: GOAD - Use embedded GOAD dataset
+# =============================================================================
+- name: Load GOAD data for domain
+  when: ludus_ad_content_mode == "goad"
+  block:
+    - name: Validate domain exists in GOAD data
+      ansible.builtin.assert:
+        that:
+          - _ludus_domain_name in ludus_goad_data
+        fail_msg: >
+          Domain '{{ _ludus_domain_name }}' not found in GOAD dataset.
+          Available domains: {{ ludus_goad_data.keys() | list | join(', ') }}
+
+    - name: Set GOAD data fact
+      ansible.builtin.set_fact:
+        _ludus_ad_data: "{{ ludus_goad_data[_ludus_domain_name] }}"
+
+# =============================================================================
+# MODE: CUSTOM - Use user-provided data
+# =============================================================================
+- name: Load custom data
+  when: ludus_ad_content_mode == "custom"
+  block:
+    - name: Validate custom data is provided
+      ansible.builtin.assert:
+        that:
+          - ludus_users | length > 0 or ludus_groups.global | length > 0 or ludus_organisation_units | length > 0
+        fail_msg: "Custom mode selected but no AD content data provided. Set ludus_users, ludus_groups, or ludus_organisation_units."
+
+    - name: Set custom data fact
+      ansible.builtin.set_fact:
+        _ludus_ad_data:
+          organisation_units: "{{ ludus_organisation_units }}"
+          groups: "{{ ludus_groups }}"
+          users: "{{ ludus_users }}"
+          multi_domain_group_members: "{{ ludus_multi_domain_group_members }}"
+
+# =============================================================================
+# NOTE: Password policy is now handled by ludus_ad_password_policy role
+# Ensure that role runs BEFORE this role via depends_on in range config
+# =============================================================================
+
+# =============================================================================
+# ORGANISATIONAL UNITS (using microsoft.ad.ou)
+# =============================================================================
+- name: Create Organisational Units
+  microsoft.ad.ou:
+    name: "{{ item.name }}"
+    path: "{{ item.path }}"
+    state: present
+    protect_from_deletion: false
+  loop: "{{ _ludus_ad_data.organisation_units | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: _ludus_ad_data.organisation_units is defined and _ludus_ad_data.organisation_units | length > 0
+
+# =============================================================================
+# GROUPS - GLOBAL (using microsoft.ad.group)
+# Create groups first WITHOUT managed_by (users don't exist yet)
+# =============================================================================
+- name: Create global security groups
+  microsoft.ad.group:
+    name: "{{ item.name }}"
+    path: "{{ item.path }}"
+    scope: global
+    category: security
+    state: present
+  loop: "{{ _ludus_ad_data.groups.global | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: _ludus_ad_data.groups.global is defined and _ludus_ad_data.groups.global | length > 0
+
+- name: Add members to global groups
+  microsoft.ad.group:
+    name: "{{ item.name }}"
+    state: present
+    members:
+      add: "{{ item.members }}"
+  loop: "{{ _ludus_ad_data.groups.global | default([]) | selectattr('members', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: _ludus_ad_data.groups.global is defined
+
+# =============================================================================
+# GROUPS - DOMAIN LOCAL (using microsoft.ad.group)
+# Create without managed_by (users don't exist yet)
+# =============================================================================
+- name: Create domain-local security groups
+  microsoft.ad.group:
+    name: "{{ item.name }}"
+    path: "{{ item.path }}"
+    scope: domainlocal
+    category: security
+    state: present
+  loop: "{{ _ludus_ad_data.groups.domainlocal | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: _ludus_ad_data.groups.domainlocal is defined and _ludus_ad_data.groups.domainlocal | length > 0
+
+# =============================================================================
+# GROUPS - UNIVERSAL (using microsoft.ad.group)
+# Create without managed_by (users don't exist yet)
+# =============================================================================
+- name: Create universal security groups
+  microsoft.ad.group:
+    name: "{{ item.name }}"
+    path: "{{ item.path }}"
+    scope: universal
+    category: security
+    state: present
+  loop: "{{ _ludus_ad_data.groups.universal | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: _ludus_ad_data.groups.universal is defined and _ludus_ad_data.groups.universal | length > 0
+
+# =============================================================================
+# USERS (using microsoft.ad.user)
+# First create users with a temporary strong password, then set final password
+# =============================================================================
+- name: Create AD users (without setting final password)
+  microsoft.ad.user:
+    name: "{{ item.name }}"
+    firstname: "{{ item.firstname | default(omit) }}"
+    surname: "{{ item.surname | default(omit) }}"
+    password: "TempP@ssw0rd123!"
+    path: "{{ item.path }}"
+    description: "{{ item.description | default(omit) }}"
+    city: "{{ item.city | default(omit) }}"
+    state: present
+    enabled: true
+    update_password: on_create
+    password_never_expires: "{{ item.password_never_expires | default(true) }}"
+  loop: "{{ _ludus_ad_data.users | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: _ludus_ad_data.users is defined and _ludus_ad_data.users | length > 0
+  ignore_errors: true
+
+- name: Set user passwords via PowerShell (handles weak passwords after policy change)
+  ansible.windows.win_powershell:
+    script: |
+      [CmdletBinding()]
+      param (
+        [String]$Username,
+        [String]$Password
+      )
+      
+      Import-Module ActiveDirectory
+      
+      try {
+        $user = Get-ADUser -Identity $Username -ErrorAction Stop
+        Set-ADAccountPassword -Identity $Username -Reset -NewPassword (ConvertTo-SecureString -AsPlainText $Password -Force)
+        Set-ADUser -Identity $Username -ChangePasswordAtLogon $false
+        Enable-ADAccount -Identity $Username
+        Write-Output "Password set for $Username"
+        $Ansible.Changed = $true
+      } catch [Microsoft.ActiveDirectory.Management.ADIdentityNotFoundException] {
+        Write-Output "User $Username not found"
+        $Ansible.Changed = $false
+      } catch {
+        # User might already have this password, or other non-fatal error
+        Write-Output "Note: $($_.Exception.Message)"
+        $Ansible.Changed = $false
+      }
+    parameters:
+      Username: "{{ item.name }}"
+      Password: "{{ item.password }}"
+  loop: "{{ _ludus_ad_data.users | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: _ludus_ad_data.users is defined and _ludus_ad_data.users | length > 0
+
+# =============================================================================
+# USER GROUP MEMBERSHIPS (using microsoft.ad.group for idempotency)
+# Build a list of all unique groups and their members from user data
+# =============================================================================
+- name: Build group membership map from users
+  ansible.builtin.set_fact:
+    _group_membership_map: >-
+      {{
+        _ludus_ad_data.users | default([])
+        | selectattr('groups', 'defined')
+        | map(attribute='groups')
+        | flatten
+        | unique
+        | reject('equalto', 'Domain Users')
+        | list
+      }}
+
+- name: Add users to groups via microsoft.ad.group
+  microsoft.ad.group:
+    identity: "{{ item }}"
+    members:
+      add: "{{ _ludus_ad_data.users | selectattr('groups', 'defined') | selectattr('groups', 'contains', item) | map(attribute='name') | list }}"
+  loop: "{{ _group_membership_map }}"
+  loop_control:
+    label: "{{ item }}"
+  when: _ludus_ad_data.users is defined and _group_membership_map | length > 0
+
+# =============================================================================
+# SERVICE PRINCIPAL NAMES (using microsoft.ad.user)
+# =============================================================================
+- name: Set Service Principal Names on users
+  microsoft.ad.user:
+    name: "{{ item.name }}"
+    state: present
+    spns:
+      add: "{{ item.spns }}"
+  loop: "{{ _ludus_ad_data.users | default([]) | selectattr('spns', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: _ludus_ad_data.users is defined
+
+# =============================================================================
+# SET MANAGED_BY ON GROUPS (now that users exist)
+# =============================================================================
+- name: Set managed_by on global groups
+  microsoft.ad.group:
+    identity: "{{ item.name }}"
+    managed_by: "{{ item.managed_by }}"
+  loop: "{{ _ludus_ad_data.groups.global | default([]) | selectattr('managed_by', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.name }} → {{ item.managed_by }}"
+  when: _ludus_ad_data.groups.global is defined
+
+- name: Set managed_by on domain-local groups
+  microsoft.ad.group:
+    identity: "{{ item.name }}"
+    managed_by: "{{ item.managed_by }}"
+  loop: "{{ _ludus_ad_data.groups.domainlocal | default([]) | selectattr('managed_by', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.name }} → {{ item.managed_by }}"
+  when: _ludus_ad_data.groups.domainlocal is defined
+
+# =============================================================================
+# NOTE: Cross-domain group members are now handled by ludus_ad_forest_trust
+# role, which runs AFTER the forest trust is established.
+# See ludus_cross_domain_group_members variable in that role.
+# =============================================================================
+
+# =============================================================================
+# SUMMARY
+# =============================================================================
+- name: Display summary
+  ansible.builtin.debug:
+    msg: |
+      ludus_bulk_ad_content completed:
+        Mode: {{ ludus_ad_content_mode }}
+        Domain: {{ _ludus_domain_name }}
+        OUs created: {{ _ludus_ad_data.organisation_units | default([]) | length }}
+        Groups created: {{ (_ludus_ad_data.groups.global | default([]) | length) + (_ludus_ad_data.groups.domainlocal | default([]) | length) + (_ludus_ad_data.groups.universal | default([]) | length) }}
+        Users created: {{ _ludus_ad_data.users | default([]) | length }}

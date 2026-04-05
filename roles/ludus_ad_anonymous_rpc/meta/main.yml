@@ -1,0 +1,24 @@
+---
+galaxy_info:
+  role_name: ludus_ad_anonymous_rpc
+  author: RodSec Labs
+  description: Configure anonymous RPC/SMB enumeration for Ludus cyber ranges
+  license: MIT
+  version: "0.2.0"
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Windows
+      versions:
+        - "2019"
+        - "2022"
+  galaxy_tags:
+    - windows
+    - activedirectory
+    - rpc
+    - smb
+    - enumeration
+    - ludus
+    - pentest
+    - security
+
+dependencies: []

