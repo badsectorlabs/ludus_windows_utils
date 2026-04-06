@@ -123,10 +123,6 @@ This usually means the parent domain cannot be contacted. Check:
 
 Ensure you're using UPN format for credentials: `domainadmin@domain.fqdn` (not `DOMAIN\user`).
 
-## License
-
-MIT
-
 ## Author
 
 RodSec Labs / Bad Sector Labs

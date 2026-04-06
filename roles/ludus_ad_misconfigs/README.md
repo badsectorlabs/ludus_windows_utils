@@ -241,10 +241,6 @@ sudo responder -I eth0 -rdwv
 - LSA PPL requires a reboot to take effect
 - GOAD mode uses hostname matching (case-insensitive)
 
-## License
-
-MIT
-
 ## Author
 
 Bad Sector Labs

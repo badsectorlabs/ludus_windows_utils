@@ -3,7 +3,7 @@ galaxy_info:
   role_name: ludus_child_domain_join
   author: badsectorlabs
   description: Joins a Windows machine to an AD child domain using microsoft.ad.membership
-  license: MIT
+  license: AGPL-3.0-or-later
   min_ansible_version: "2.14"
   platforms:
     - name: Windows

@@ -118,10 +118,6 @@ This role is idempotent:
 
 Ensure credentials use UPN format: `domainadmin@north.sevenkingdoms.local`
 
-## License
-
-MIT
-
 ## Author
 
 RodSec Labs / Bad Sector Labs

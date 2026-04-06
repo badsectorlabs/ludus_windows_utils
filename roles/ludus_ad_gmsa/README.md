@@ -96,6 +96,3 @@ Test-ADServiceAccount -Identity gmsaServiceAccount
 # Should return: True
 ```
 
-## License
-
-Apache-2.0

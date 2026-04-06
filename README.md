@@ -443,10 +443,6 @@ This collection was inspired by and builds upon the work of:
 - **[GOAD (Game of Active Directory)](https://github.com/Orange-Cyberdefense/GOAD)** by [@Mayfly277](https://github.com/Mayfly277) and the [Orange Cyberdefense](https://github.com/Orange-Cyberdefense) team — the original AD attack lab that inspired many of these role configurations
 - **[@ChoiSG](https://github.com/ChoiSG)** and their [ludus_ansible_roles](https://github.com/ChoiSG/ludus_ansible_roles) — early Ludus community role contributions that helped shape the approach
 
-## License
-
-GPLv3
-
 ## Author Information
 
 This collection was created by [Bad Sector Labs](https://github.com/badsectorlabs), for [Ludus](https://ludus.cloud/).

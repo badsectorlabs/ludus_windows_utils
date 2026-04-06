@@ -6,7 +6,7 @@ galaxy_info:
     Creates bidirectional AD forest trusts and DNS conditional forwarders.
     Optionally enables SID history on the trust for migration scenarios.
   company: Bad Sector Labs
-  license: MIT
+  license: AGPL-3.0-or-later
   min_ansible_version: "2.14"
   platforms:
     - name: Windows

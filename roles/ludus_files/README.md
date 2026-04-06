@@ -152,6 +152,3 @@ None.
 - This role is designed to run **after** domain join and role deployment — place it last in the roles list
 - Complements `ludus_random_files` (published) — that role generates random binary files for volume; this role generates _meaningful_ text content for post-exploitation practice
 
-## License
-
-MIT

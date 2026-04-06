@@ -6,7 +6,7 @@ galaxy_info:
     Sets AD ACL entries for attack chains. Supports GOAD pre-defined ACL chains
     or custom ACL entries. Idempotent - checks if ACE exists before adding.
   company: Bad Sector Labs
-  license: MIT
+  license: AGPL-3.0-or-later
   min_ansible_version: "2.14"
   platforms:
     - name: Windows

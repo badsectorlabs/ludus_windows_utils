@@ -233,6 +233,3 @@ ludus_multi_domain_group_members:
 
 Note: Cross-domain membership requires the trust to be established first. The role will ignore errors if the trust is not yet live.
 
-## License
-
-Apache-2.0

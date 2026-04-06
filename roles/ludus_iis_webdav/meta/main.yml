@@ -8,8 +8,7 @@ galaxy_info:
     Supports client, server, or both modes. Optional ASP.NET 4.5 features
     and GOAD wwwroot content deployment for webshell upload attack path.
   company: Bad Sector Labs
-  license: MIT
-  version: "0.3.0"
+  license: AGPL-3.0-or-later
   min_ansible_version: "2.14"
   platforms:
     - name: Windows

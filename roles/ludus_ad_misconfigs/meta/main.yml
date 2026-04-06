@@ -3,8 +3,7 @@ galaxy_info:
   role_name: ludus_ad_misconfigs
   author: Bad Sector Labs
   description: Configure Windows/AD security misconfigurations for attack labs (GOAD, custom scenarios)
-  license: MIT
-  version: "0.8.0"
+  license: AGPL-3.0-or-later
   min_ansible_version: "2.14"
   platforms:
     - name: Windows

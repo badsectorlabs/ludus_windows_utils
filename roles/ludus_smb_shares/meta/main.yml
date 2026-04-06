@@ -6,8 +6,7 @@ galaxy_info:
     Configure SMB shares with permissions for Ludus cyber ranges.
     Supports anonymous access via guest account activation and registry config.
     Uses ansible.windows.win_share (matches GOAD approach).
-  license: MIT
-  version: "0.3.0"
+  license: AGPL-3.0-or-later
   min_ansible_version: "2.14"
   platforms:
     - name: Windows
