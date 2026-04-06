@@ -17,16 +17,44 @@ All roles are fully parameterized via `role_vars` in your Ludus range config. No
 
 ## Installation
 
-### Via Ansible Galaxy
+### Option 1: Clone and add roles manually
+
+Clone the repo and add each role to your Ludus server individually. This is useful if you want to pick specific roles or pin to a branch/commit.
+
+```bash
+git clone https://github.com/badsectorlabs/ludus_windows_utils.git
+cd ludus_windows_utils
+for role in roles/*/; do ludus ansible role add -d "$role"; done
+```
+
+When using roles installed this way, reference them by their short name in your range config:
+
+```yaml
+roles:
+  - ludus_ad_password_policy
+  - ludus_bulk_ad_content
+  - ludus_ad_acls
+```
+
+### Option 2: Install as a collection from Ansible Galaxy
+
+```bash
+ludus ansible collection add badsectorlabs.ludus_windows_utils
+```
+
+Or with `ansible-galaxy` directly:
 
 ```bash
 ansible-galaxy collection install badsectorlabs.ludus_windows_utils
 ```
 
-### Via Ludus
+When using roles installed as a collection, reference them with the fully qualified collection name in your range config:
 
-```bash
-ludus ansible collection add badsectorlabs.ludus_windows_utils
+```yaml
+roles:
+  - badsectorlabs.ludus_windows_utils.ludus_ad_password_policy
+  - badsectorlabs.ludus_windows_utils.ludus_bulk_ad_content
+  - badsectorlabs.ludus_windows_utils.ludus_ad_acls
 ```
 
 ## Included Roles
