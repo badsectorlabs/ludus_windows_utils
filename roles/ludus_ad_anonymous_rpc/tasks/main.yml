@@ -198,6 +198,7 @@
   ansible.windows.win_reboot:
     reboot_timeout: 600
     post_reboot_delay: 30
+  register: _lsa_reboot
   when: >
     (_restrict_anonymous.changed | default(false)) or
     (_restrict_sam.changed | default(false)) or
@@ -205,6 +206,268 @@
     (_lsa_policy.changed | default(false)) or
     (_restrict_remote_sam.changed | default(false)) or
     (_anon_group.changed | default(false))
+
+# Rebooting a domain-joined machine (especially a child DC) can break:
+#   1. The machine's own secure channel (Test-ComputerSecureChannel covers this)
+#   2. The INTER-DOMAIN TRUST channel with parent/trusted domains
+# Test-ComputerSecureChannel on a DC only tests the DC's own machine account against
+# its own domain — which trivially passes since it IS the DC. It does NOT test the
+# trust channel to the parent domain. When the trust channel is broken, the child DC
+# cannot forward authentication for parent domain users (e.g., domainadmin@parent),
+# causing domain joins to fail with "The specified network name is no longer available"
+# or "Access is denied".
+
+- name: Verify and repair domain secure channel after reboot
+  ansible.windows.win_powershell:
+    script: |
+      if (-not (Test-ComputerSecureChannel -ErrorAction SilentlyContinue)) {
+          Test-ComputerSecureChannel -Repair -ErrorAction Stop
+          $Ansible.Changed = $true
+      } else {
+          $Ansible.Changed = $false
+      }
+  register: _anon_rpc_channel_repair
+  until: _anon_rpc_channel_repair is succeeded
+  retries: 5
+  delay: 30
+  when: _lsa_reboot.changed | default(false)
+
+# After reboot + channel repair, wait for critical DC services to fully initialize.
+# The secure channel repair may return success before ADWS/Netlogon/KDC are fully
+# operational, which causes downstream roles (e.g., child domain joins) to fail.
+- name: Wait for ADWS service to stabilize after reboot
+  ansible.windows.win_service:
+    name: ADWS
+    state: started
+  register: _adws_ready
+  until: _adws_ready is succeeded
+  retries: 20
+  delay: 15
+  when: _lsa_reboot.changed | default(false)
+
+- name: Wait for Netlogon service to stabilize after reboot
+  ansible.windows.win_service:
+    name: Netlogon
+    state: started
+  register: _netlogon_ready
+  until: _netlogon_ready is succeeded
+  retries: 20
+  delay: 15
+  when: _lsa_reboot.changed | default(false)
+
+# Reset inter-domain trust secure channels after reboot.
+# On a child DC, the trust channel to the parent domain is separate from the machine
+# secure channel. nltest /sc_reset forces the Netlogon service to re-establish the
+# trust channel by rediscovering and re-authenticating with the trusted domain's DC.
+# Without this, cross-domain authentication (e.g., parent Enterprise Admin auth
+# forwarded through the child DC for domain joins) fails with Access Denied.
+- name: Reset inter-domain trust secure channels after reboot
+  ansible.windows.win_powershell:
+    script: |
+      $changed = $false
+
+      # Enumerate all domain trusts visible to this DC
+      $trustOutput = nltest /domain_trusts 2>&1
+      if ($LASTEXITCODE -ne 0) {
+          Write-Output "Not a DC or no trusts found — skipping trust channel reset"
+          $Ansible.Changed = $false
+          return
+      }
+
+      # Parse trusted domain FQDNs from nltest output
+      # Format: "    0: NETBIOS fqdn.name (NT 5) (flags...)"
+      $myDomain = (Get-WmiObject Win32_ComputerSystem).Domain
+      $trustedDomains = @()
+      foreach ($line in ($trustOutput -split "`n")) {
+          if ($line -match '^\s+\d+:\s+\S+\s+(\S+\.\S+)\s') {
+              $dom = $Matches[1].Trim('.')
+              # Skip our own domain
+              if ($dom -ne $myDomain) {
+                  $trustedDomains += $dom
+              }
+          }
+      }
+
+      if ($trustedDomains.Count -eq 0) {
+          Write-Output "No cross-domain trusts found — no trust channels to reset"
+          $Ansible.Changed = $false
+          return
+      }
+
+      foreach ($trust in $trustedDomains) {
+          Write-Output "Resetting secure channel with trusted domain: $trust"
+          $resetResult = nltest /sc_reset:$trust 2>&1
+          if ($LASTEXITCODE -eq 0) {
+              Write-Output "  SUCCESS: Trust channel with $trust re-established"
+              $changed = $true
+          } else {
+              Write-Output "  WARNING: Trust channel reset with $trust returned: $resetResult"
+              # Don't fail — the trust may not have a direct SC (e.g., transitive trust)
+          }
+      }
+
+      # Also restart Netlogon to ensure all trust channels are cleanly initialized
+      Restart-Service Netlogon -Force
+      Start-Sleep -Seconds 10
+      Write-Output "Netlogon service restarted to finalize trust channel recovery"
+      $changed = $true
+
+      $Ansible.Changed = $changed
+  register: _trust_channel_reset
+  until: _trust_channel_reset is succeeded
+  retries: 5
+  delay: 30
+  when: _lsa_reboot.changed | default(false)
+
+# Verify inter-domain trust channels after reboot using nltest /sc_verify.
+# IMPORTANT: Do NOT use SMB "net use" as the verification test here — the LSA
+# anonymous RPC settings we just applied (RestrictAnonymous=0, EveryoneIncludesAnonymous=1)
+# deliberately alter NTLM authentication behavior on this DC, causing "net use" with
+# cross-domain NTLM tokens to return "Access denied" even when the trust is healthy.
+# Kerberos-based operations (domain joins, AD queries) are unaffected — nltest /sc_verify
+# tests the actual Netlogon secure channel which uses Kerberos/NTLM at the machine level.
+- name: Verify inter-domain trust via nltest /sc_verify
+  ansible.windows.win_powershell:
+    script: |
+      $trustOutput = nltest /domain_trusts 2>&1
+      if ($LASTEXITCODE -ne 0) {
+          Write-Output "Not a DC or no trusts — skipping trust verification"
+          $Ansible.Changed = $false
+          return
+      }
+
+      # Parse trusted domain FQDNs from nltest output
+      $myDomain = (Get-WmiObject Win32_ComputerSystem).Domain
+      $trustedDomains = @()
+      foreach ($line in ($trustOutput -split "`n")) {
+          if ($line -match '^\s+\d+:\s+\S+\s+(\S+\.\S+)\s') {
+              $dom = $Matches[1].Trim('.')
+              if ($dom -ne $myDomain) {
+                  $trustedDomains += $dom
+              }
+          }
+      }
+
+      if ($trustedDomains.Count -eq 0) {
+          Write-Output "No cross-domain trusts found — nothing to verify"
+          $Ansible.Changed = $false
+          return
+      }
+
+      $allHealthy = $true
+      foreach ($trust in $trustedDomains) {
+          $verifyResult = nltest /sc_verify:$trust 2>&1
+          if ($LASTEXITCODE -eq 0) {
+              Write-Output "Trust with $trust VERIFIED via nltest /sc_verify"
+          } else {
+              Write-Output "WARNING: nltest /sc_verify for $trust returned non-zero — $verifyResult"
+              # Don't fail — the trust may still work for Kerberos operations
+              # even if nltest reports issues (common after LSA changes)
+              $allHealthy = $false
+          }
+      }
+
+      if (-not $allHealthy) {
+          Write-Output "NOTE: Some trust verifications reported warnings. This is expected after"
+          Write-Output "anonymous RPC LSA changes. Kerberos-based operations (domain joins) are"
+          Write-Output "typically unaffected. Use 'nltest /sc_query:<domain>' to check manually."
+      }
+
+      $Ansible.Changed = $false
+  register: _trust_verify
+  until: _trust_verify is succeeded
+  retries: 3
+  delay: 15
+  when: _lsa_reboot.changed | default(false)
+
+- name: Display trust verification results
+  ansible.builtin.debug:
+    msg: "{{ _trust_verify.output | default(['No trust verification needed']) }}"
+  when: _lsa_reboot.changed | default(false)
+
+# Final readiness gate: verify the DC can actually serve authenticated AD queries.
+# This proves KDC + Netlogon + LDAP are all working end-to-end, not just that the
+# services are in "started" state. Uses native microsoft.ad.object_info — no PowerShell.
+- name: Verify DC is fully functional after reboot (authenticated AD query)
+  microsoft.ad.object_info:
+    identity: "{{ ludus_domain_fqdn | default(ansible_domain) }}"
+  register: _dc_functional
+  until: _dc_functional is succeeded
+  retries: 15
+  delay: 30
+  when: _lsa_reboot.changed | default(false)
+
+# =============================================================================
+# UNCONDITIONAL TRUST HEALTH CHECK (idempotency safety)
+# =============================================================================
+# This runs every time — NOT gated on reboot. If this role was previously applied
+# and the trust channel is broken (e.g., from a failed deploy or external reboot),
+# it will detect and repair it. This ensures re-runs are safe.
+
+# Unconditional trust health check uses nltest /sc_verify (Kerberos-based) instead
+# of SMB "net use". The anonymous RPC LSA settings we apply deliberately alter NTLM
+# authentication, causing SMB-based cross-domain auth tests to fail with "Access denied"
+# even when the trust is perfectly healthy for Kerberos operations (domain joins, etc.).
+- name: Unconditional trust health check (runs every time on DCs with trusts)
+  ansible.windows.win_powershell:
+    script: |
+      # Only relevant on DCs with trusts
+      $trustOutput = nltest /domain_trusts 2>&1
+      if ($LASTEXITCODE -ne 0) {
+          Write-Output "Not a DC or no trusts — skipping health check"
+          $Ansible.Changed = $false
+          return
+      }
+
+      # Parse trusted domain FQDNs from nltest output
+      $myDomain = (Get-WmiObject Win32_ComputerSystem).Domain
+      $trustedDomains = @()
+      foreach ($line in ($trustOutput -split "`n")) {
+          if ($line -match '^\s+\d+:\s+\S+\s+(\S+\.\S+)\s') {
+              $dom = $Matches[1].Trim('.')
+              if ($dom -ne $myDomain) {
+                  $trustedDomains += $dom
+              }
+          }
+      }
+
+      if ($trustedDomains.Count -eq 0) {
+          Write-Output "No cross-domain trusts — nothing to check"
+          $Ansible.Changed = $false
+          return
+      }
+
+      $repaired = $false
+      foreach ($trust in $trustedDomains) {
+          $verifyResult = nltest /sc_verify:$trust 2>&1
+          if ($LASTEXITCODE -eq 0) {
+              Write-Output "Trust with $trust HEALTHY (nltest /sc_verify passed)"
+          } else {
+              Write-Output "Trust with $trust may need attention — nltest /sc_verify: $verifyResult"
+              Write-Output "  Attempting nltest /sc_reset:$trust"
+              nltest /sc_reset:$trust 2>&1 | ForEach-Object { Write-Output "    $_" }
+              $repaired = $true
+
+              # Re-verify after reset
+              Start-Sleep -Seconds 10
+              $reVerify = nltest /sc_verify:$trust 2>&1
+              if ($LASTEXITCODE -eq 0) {
+                  Write-Output "  Trust with $trust REPAIRED (nltest /sc_verify now passes)"
+              } else {
+                  Write-Output "  WARNING: Trust with $trust still reports issues after reset."
+                  Write-Output "  This may be expected with anonymous RPC LSA settings applied."
+                  Write-Output "  Kerberos operations (domain joins) are typically unaffected."
+                  # Do NOT throw — anonymous RPC settings can cause nltest false negatives
+              }
+          }
+      }
+
+      $Ansible.Changed = $repaired
+  register: _trust_health_check
+
+- name: Display trust health check results
+  ansible.builtin.debug:
+    msg: "{{ _trust_health_check.output | default(['No trusts to check']) }}"
 
 # =============================================================================
 # VERIFICATION

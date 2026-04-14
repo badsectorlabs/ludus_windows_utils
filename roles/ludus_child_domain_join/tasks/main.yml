@@ -3,7 +3,19 @@
 # Reference: https://docs.ansible.com/ansible/latest/collections/microsoft/ad/membership_module.html
 #
 # microsoft.ad.membership is idempotent - it checks membership state and skips if joined
-# Uses the PARENT domain's Enterprise Admin credentials to join machines to the child domain.
+#
+# IMPORTANT: Uses CHILD domain admin credentials, NOT parent/Enterprise Admin.
+# A workgroup machine (not yet domain-joined) can only use NTLM authentication.
+# If we used parent domain creds (domainadmin@sevenkingdoms.local), the child DC
+# would need to forward NTLM auth to the parent DC via the trust channel. This
+# forwarding breaks when ludus_ad_anonymous_rpc LSA settings are applied on the
+# child DC (RestrictAnonymous=0, EveryoneIncludesAnonymous=1), causing
+# "The specified network name is no longer available" during NetJoinDomain.
+#
+# By using child domain creds (domainadmin@north.sevenkingdoms.local), the auth
+# is handled entirely locally on the child DC — no cross-domain NTLM forwarding.
+# Ludus uses the same admin credentials across all domains by default, so the
+# child domain admin has the same username/password as the parent.
 
 # Step 1: Configure DNS to the child domain DC
 - name: Configure DNS to child domain DC
@@ -12,11 +24,32 @@
     ipv4_addresses:
       - "{{ ludus_child_dc_ip }}"
 
-# Step 2: Join the machine to the child domain (idempotent - skips if already joined)
+# Step 2: Pre-flight — verify child DC network services are reachable (TCP ports)
+
+- name: Wait for LDAP port on child DC
+  ansible.windows.win_wait_for:
+    host: "{{ ludus_child_dc_ip }}"
+    port: 389
+    timeout: 300
+
+- name: Wait for Kerberos port on child DC
+  ansible.windows.win_wait_for:
+    host: "{{ ludus_child_dc_ip }}"
+    port: 88
+    timeout: 300
+
+- name: Wait for SMB port on child DC
+  ansible.windows.win_wait_for:
+    host: "{{ ludus_child_dc_ip }}"
+    port: 445
+    timeout: 300
+
+# Step 3: Join the machine to the child domain (idempotent - skips if already joined)
+# Uses CHILD domain admin credentials to avoid cross-domain NTLM forwarding issues
 - name: Join machine to child domain
   microsoft.ad.membership:
     dns_domain_name: "{{ ludus_child_domain_fqdn }}"
-    domain_admin_user: "{{ ludus_domain_admin_user | default(defaults.ad_domain_admin + '@' + ludus_parent_domain_fqdn) }}"
+    domain_admin_user: "{{ ludus_domain_admin_user | default(defaults.ad_domain_admin + '@' + ludus_child_domain_fqdn) }}"
     domain_admin_password: "{{ ludus_domain_admin_password | default(defaults.ad_domain_admin_password) }}"
     state: domain
     reboot: true

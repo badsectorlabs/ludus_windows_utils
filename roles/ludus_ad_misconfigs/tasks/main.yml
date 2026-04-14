@@ -777,7 +777,7 @@
 
     - name: Reboot if WebDAV-Redirector feature requires it
       ansible.windows.win_reboot:
-        reboot_timeout: 600
+        reboot_timeout: 900
         post_reboot_delay: 30
       when: _webclient_feature.reboot_required | default(false)
 
