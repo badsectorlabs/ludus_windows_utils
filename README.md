@@ -65,6 +65,7 @@ roles:
 | [`ludus_ad_anonymous_rpc`](#ludus_ad_anonymous_rpc) | Enable anonymous RPC/SMB enumeration on DCs | Domain Controllers |
 | [`ludus_ad_forest_trust`](#ludus_ad_forest_trust) | Create bidirectional AD forest trusts with DNS forwarders | Domain Controllers |
 | [`ludus_ad_gmsa`](#ludus_ad_gmsa) | Create Group Managed Service Accounts (gMSA) | Domain Controllers |
+| [`ludus_ad_group_add_member`](#ludus_ad_group_add_member) | Add an existing ad group to be a member of another existing ad group | Domain Controllers |
 | [`ludus_ad_laps`](#ludus_ad_laps) | Configure Microsoft LAPS (schema, GPO, DACL, client) | DCs + Member Servers |
 | [`ludus_ad_misconfigs`](#ludus_ad_misconfigs) | Apply common Windows/AD security misconfigurations | Any Windows VM |
 | [`ludus_ad_password_policy`](#ludus_ad_password_policy) | Set AD domain password policy | Domain Controllers |
@@ -132,6 +133,35 @@ Creates bidirectional AD forest trusts between two domain controllers, including
 | `ludus_forest_trust_enable_sid_history` | `false` | Enable SID history on the trust |
 
 > **Note:** Use `depends_on` in range configs to ensure the remote DC's domain is created before establishing the trust.
+
+---
+
+### ludus_ad_group_add_member
+
+Adds an existing ad group to be a member of another existing as group.
+
+**Key Variables:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `ludus_gmsa_accounts` | `[]` | List of gMSA accounts to create |
+
+**Example `role_vars`:**
+```yaml
+role_vars:
+  ludus_ad_group_add_member_items:
+    # Add custom group `Server Admins` to be a member of custom group `Global Admins` located at path `OU=Domain Groups,OU=Company,DC=corp,DC=local`
+    - parent_group: Global Admins
+      path: OU=Domain Groups,OU=Company,DC=corp,DC=local
+      child_group: CN=Server Admins,OU=Domain Groups,OU=Company,DC=corp,DC=local
+    # Add custom group `Workstation Admins` to be a member of custom group `Global Admins` located at path `OU=Domain Groups,OU=Company,DC=corp,DC=local`
+    - parent_group: Global Admins
+      path: OU=Domain Groups,OU=Company,DC=corp,DC=local
+      child_group: CN=Workstation Admins,OU=Domain Groups,OU=Company,DC=corp,DC=local
+    # Add custom group `Global Admins` to be a member of built-in group `Domain Admins`
+    - parent_group: Domain Admins
+      child_group: CN=Global Admins,OU=Domain Groups,OU=Company,DC=corp,DC=local
+```
 
 ---
 

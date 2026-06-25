@@ -1,0 +1,19 @@
+---
+galaxy_info:
+  role_name: ludus_ad_group_add_member
+  author: badsectorlabs
+  description: Add an existing ad group to another existing ad group.
+  company: Bad Sector Labs
+  license: AGPL-3.0-or-later
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Windows
+      versions:
+        - 2019
+        - 2022
+  galaxy_tags:
+    - windows
+    - active_directory
+    - ludus
+
+dependencies: []

@@ -1,0 +1,9 @@
+---
+- name: Add members to groups
+  microsoft.ad.group:
+    name: "{{ item.parent_group }}"
+    path: "{{ item.path if item.path | default('') != '' else omit }}"
+    members:
+      add: 
+        - "{{ item.child_group }}"
+  loop: "{{ ludus_ad_group_add_member_items }}"
