@@ -351,7 +351,7 @@ ludus_goad_misconfigs:
         user: "NORTH\\eddard.stark"
         password: "FightP3aceAndHonor!"
         command: "cmd.exe"
-        arguments: '/c powershell -Command "New-PSDrive -Name X -PSProvider FileSystem -Root \\\\meereen\\Private -ErrorAction SilentlyContinue"'
+        arguments: '/c powershell -Command "New-PSDrive -Name X -PSProvider FileSystem -Root \\Meren\Private -ErrorAction SilentlyContinue"'
         repeat_interval: "PT5M"
       - name: "rdp_bot"
         description: "RDP connection simulation bot"
@@ -365,7 +365,7 @@ ludus_goad_misconfigs:
         user: "NORTH\\robb.stark"
         password: "sexywolfy"
         command: "cmd.exe"
-        arguments: '/c powershell -Command "New-PSDrive -Name Y -PSProvider FileSystem -Root \\\\braavos\\private -ErrorAction SilentlyContinue"'
+        arguments: '/c powershell -Command "New-PSDrive -Name Y -PSProvider FileSystem -Root \\Bravos\private -ErrorAction SilentlyContinue"'
         repeat_interval: "PT2M"
     gpo_abuse:
       enabled: true
